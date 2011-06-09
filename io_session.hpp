@@ -39,6 +39,8 @@ public:
 public:
 	int write_string(string message, bool eol); // Write string (with or without NL character)
 	int read_string(string &message); // Read string
+	int write_binblock(char *buffer, int count); // Write arbitrary length binblock
+	int read_binblock(char *buffer, int max); // Read arbitrary length binblock
 
 private:
 
