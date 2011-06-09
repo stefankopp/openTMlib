@@ -1,5 +1,7 @@
 /*
  * usbtmc.h
+ * This file is part of an open-source test and measurement I/O library.
+ * See documentation for details.
  *
  * Copyright (C) 2008, 2011 Stefan Kopp, Gechingen, Germany
  *
@@ -18,13 +20,14 @@
  */
 
 /* Maximum number of devices serviced by this driver */
-#define USBTMC_MAX_DEVICES			 						64
+#define USBTMC_MAX_DEVICES			 						32
 
 #define USBTMC_SHORT_STR_LEN								20
 #define USBTMC_LONG_STR_LEN									200
 
 /* This structure is used to track instrument details */
-struct usbtmc_instrument {
+struct usbtmc_instrument
+{
 	int minor_number;
 	char manufacturer[USBTMC_LONG_STR_LEN];
 	char product[USBTMC_LONG_STR_LEN];
@@ -33,10 +36,8 @@ struct usbtmc_instrument {
 	unsigned short int product_code;
 };
 
-/*
- * This structure is used with USBTMC_IOCTL_GET_CAPABILITIES.
- * See section 4.2.1.8 of the USBTMC specification for details.
- */
+/* Device capabilities...
+ * See section 4.2.1.8 of the USBTMC specification for details. */
 struct usbtmc_dev_capabilities {
 	char interface_capabilities;
 	char device_capabilities;
@@ -55,7 +56,7 @@ struct usbtmc_attribute
 /* This structure is used to send control messages to minor number zero. */
 struct usbtmc_io_control
 {
-	unsigned int minor_number;
+	unsigned int minor_number; /* Target driver/instrument for this message */
 	unsigned int command;
 	unsigned int argument;
 	unsigned int value;
@@ -93,6 +94,7 @@ struct usbtmc_io_control
 enum USBTMC_ERRORS
 {
 
+	USBTMC_NO_ERROR = 0,
 	USBTMC_MINOR_NUMBER_UNUSED = 0x4000,
 	USBTMC_MINOR_NUMBER_OUT_OF_RANGE = 0x4001,
 	USBTMC_MEMORY_ACCESS_ERROR = 0x4002,
@@ -100,5 +102,20 @@ enum USBTMC_ERRORS
 	USBTMC_WRONG_CONTROL_MESSAGE_SIZE = 0x4004,
 	USBTMC_WRONG_DRIVER_STATE = 0x4005,
 	USBTMC_BULK_IN_ERROR = 0x4006,
+	USBTMC_INVALID_REQUEST = 0x4007,
+	USBTMC_INVALID_OP_CODE = 0x4008,
+	USBTMC_CONTROL_OUT_ERROR = 0x4009,
+	USBTMC_CONTROL_IN_ERROR = 0x400A,
+	USBTMC_STATUS_UNSUCCESSFUL = 0x400B,
+	USBTMC_FEATURE_NOT_SUPPORTED = 0x400C,
+	USBTMC_NO_TRANSFER = 0x400D,
+	USBTMC_NO_TRANSFER_IN_PROGRESS = 0x400E,
+	USBTMC_UNABLE_TO_GET_WMAXPACKETSIZE = 0x400F,
+	USBTMC_UNABLE_TO_CLEAR_BULK_IN = 0x4010,
+	USBTMC_UNEXPECTED_STATUS = 0x4011,
+	USBTMC_INVALID_ATTRIBUTE_CODE = 0x4012,
+	USBTMC_INVALID_ATTRIBUTE_VALUE = 0x4013,
+	USBTMC_INVALID_PARAMETER = 0x4014,
+	USBTMC_RESET_ERROR = 0x4015
 
 };
