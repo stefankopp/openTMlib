@@ -1,5 +1,5 @@
 /*
- * usbtmc_session.hpp
+ * session_factory.hpp
  * This file is part of an open-source test and measurement I/O library.
  * See documentation for details.
  *
@@ -19,41 +19,27 @@
  * http://www.gnu.org/copyleft/gpl.html.
  */
 
-#ifndef USBTMC_SESSION_HPP
-#define USBTMC_SESSION_HPP
+#ifndef SESSION_FACTORY_HPP
+#define SESSION_FACTORY_HPP
 
 #include <string>
 #include "io_session.hpp"
 
 using namespace std;
 
-class usbtmc_session : public io_session
+class session_factory
 {
 
 public:
-	usbtmc_session(unsigned short int mfg_id, unsigned short int model, string serial_number);
-	usbtmc_session(string manufacturer, string product, string serial_number);
-	usbtmc_session(int minor);
-	~usbtmc_session();
-	int write_buffer(char *buffer, int count);
-	int read_buffer(char *buffer, int max);
-	int set_attribute(unsigned int attribute, unsigned int value);
-	int get_attribute(unsigned int attribute, unsigned int *value);
-	int io_operation(unsigned int operation, unsigned int value);
+	session_factory(); // Constructor
+	~session_factory(); // Destructor
+	io_session *open_session(string resource, int mode, unsigned int timeout); // Create session
+	void close_session(io_session *session_ptr);
 
 private:
-	int usbtmc_ko_fd;
-	int device_fd;
-	int minor_number;
+	void uppercase(string & string_to_change);
 
-};
-
-enum USBTMC_SESSION_ERRORS
-{
-
-	USBTMC_SESSION_OPEN_DRIVER_ERROR = 0x4100,
-	USBTMC_SESSION_READ_ERROR = 0x4101,
-	USBTMC_SESSION_WRITE_ERROR = 0x4102
+protected:
 
 };
 

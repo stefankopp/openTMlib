@@ -1,5 +1,5 @@
 /*
- * socket_session.hpp
+ * serial_session.hpp
  * This file is part of an open-source test and measurement I/O library.
  * See documentation for details.
  *
@@ -19,22 +19,23 @@
  * http://www.gnu.org/copyleft/gpl.html.
  */
 
-#ifndef SOCKET_SESSION_HPP
-#define SOCKET_SESSION_HPP
+#ifndef SERIAL_SESSION_HPP
+#define SERIAL_SESSION_HPP
 
+#include <termios.h>
 #include <string>
 #include "io_session.hpp"
 
-#define SOCKET_SESSION_LOCAL_BUFFER_SIZE					1024
+#define SERIAL_SESSION_LOCAL_BUFFER_SIZE					1024
 
 using namespace std;
 
-class socket_session : public io_session
+class serial_session : public io_session
 {
 
 public:
-	socket_session(string address, unsigned short int port);
-	~socket_session();
+	serial_session(int port);
+	~serial_session();
 	int write_buffer(char *buffer, int count);
 	int read_buffer(char *buffer, int max);
 	int set_attribute(unsigned int attribute, unsigned int value);
@@ -42,7 +43,23 @@ public:
 	int io_operation(unsigned int operation, unsigned int value);
 
 private:
-	int instrument_socket; // Socket descriptor
+	int set_basic_options();
+	int set_attribute_baudrate(unsigned int value);
+	int get_attribute_baudrate(unsigned int *value);
+	int set_attribute_size(unsigned int value);
+	int get_attribute_size(unsigned int *value);
+	int set_attribute_parity(unsigned int value);
+	int get_attribute_parity(unsigned int *value);
+	int set_attribute_stopbits(unsigned int value);
+	int get_attribute_stopbits(unsigned int *value);
+	int set_attribute_rtscts(unsigned int value);
+	int get_attribute_rtscts(unsigned int *value);
+	int set_attribute_xonxoff(unsigned int value);
+	int get_attribute_xonxoff(unsigned int *value);
+
+private:
+	int file_descriptor;
+	struct termios old_settings;
 	unsigned int timeout; // Timeout (s)
 	int term_char_enable; // Termination character enable status (0 = off, 1 = on)
 	unsigned char term_character; // Termination character

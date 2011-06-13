@@ -19,6 +19,9 @@
  * http://www.gnu.org/copyleft/gpl.html.
  */
 
+#ifndef VXI11_SESSION_HPP
+#define VXI11_SESSION_HPP
+
 #include <string>
 #include "vxi11.h"
 #include "io_session.hpp"
@@ -52,3 +55,5 @@ private:
 	int abort_socket;
 
 };
+
+#endif

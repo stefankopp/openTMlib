@@ -19,6 +19,9 @@
  * http://www.gnu.org/copyleft/gpl.html.
  */
 
+#ifndef IO_SESSION_HPP
+#define IO_SESSION_HPP
+
 #include <string>
 #include "opentmlib.hpp"
 
@@ -41,9 +44,13 @@ public:
 	int read_string(string &message); // Read string
 	int write_binblock(char *buffer, int count); // Write arbitrary length binblock
 	int read_binblock(char *buffer, int max); // Read arbitrary length binblock
+	int write_int(int value, bool eol); // Write int value (as string)
+	int read_int(int &value); // Read int value (as string)
 
 private:
 
 protected:
 
 };
+
+#endif

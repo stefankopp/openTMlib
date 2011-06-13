@@ -33,6 +33,88 @@
 
 using namespace std;
 
+usbtmc_session::usbtmc_session(unsigned short int mfg_id, unsigned short int model, string serial_number)
+{
+
+	int ret;
+
+	if ((usbtmc_ko_fd = open("/dev/usbtmc0", O_RDWR)) == -1)
+	{
+		throw -OPENTMLIB_ERROR_USBTMC_OPEN;
+		return;
+	}
+
+	struct usbtmc_io_control control_msg;
+	struct usbtmc_instrument instrument_data;
+	int minor = 1;
+
+	do
+	{
+
+		// Fill control_msg structure
+		control_msg.minor_number = 0;
+		control_msg.command = USBTMC_CONTROL_REPORT_INSTRUMENT;
+		control_msg.argument = minor;
+
+		// Send control message to USBTMC driver
+		if ((ret = write(usbtmc_ko_fd, &control_msg, sizeof(struct usbtmc_io_control))) != sizeof(struct usbtmc_io_control))
+		{
+			if (ret == -USBTMC_MINOR_NUMBER_UNUSED)
+				goto try_next;
+			throw -OPENTMLIB_ERROR_USBTMC_WRITE;
+			goto close_usbtmc_ko;
+		}
+
+		// Read response from USBTMC driver
+		if (read(usbtmc_ko_fd, &instrument_data, sizeof(struct usbtmc_instrument)) != sizeof(struct usbtmc_instrument))
+		{
+			throw -OPENTMLIB_ERROR_USBTMC_READ;
+			goto close_usbtmc_ko;
+		}
+
+		{
+
+			int serial_length = (serial_number.length() <  strlen(instrument_data.serial_number) ?
+					serial_number.length() : strlen(instrument_data.serial_number));
+			string serial_number_found(instrument_data.serial_number, serial_length);
+			if (serial_number != serial_number_found)
+				goto try_next;
+			if (mfg_id != instrument_data.manufacturer_code)
+				goto try_next;
+			if (model != instrument_data.product_code)
+				goto try_next;
+
+		}
+
+		// Found it! Open this device's minor number
+		minor_number = minor;
+		char device_file[20];
+		sprintf(device_file, "/dev/usbtmc%d", minor);
+		if ((device_fd = open(device_file, O_RDWR)) == -1)
+		{
+			throw -OPENTMLIB_ERROR_USBTMC_OPEN;
+			goto close_usbtmc_ko;
+		}
+
+		goto close_usbtmc_ko;
+
+try_next:
+
+		minor_number++;
+
+	}
+	while (minor_number <= USBTMC_MAX_DEVICES);
+
+	// Didn't find the device...
+	throw -OPENTMLIB_ERROR_USBTMC_DEVICE_NOT_FOUND;
+
+close_usbtmc_ko:
+
+	close(usbtmc_ko_fd);
+	return;
+
+}
+
 usbtmc_session::usbtmc_session(string manufacturer, string product, string serial_number)
 {
 

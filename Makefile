@@ -1,12 +1,15 @@
 
 OBJECTS += \
 	demo_opentmlib.o \
+	session_factory.o \
 	io_session.o \
 	usbtmc_session.o \
 	socket_session.o \
 	vxi11_session.o \
 	vxi11_clnt.o \
-	vxi11_xdr.o
+	vxi11_xdr.o \
+	serial_session.o \
+	opentmlib.o
 	
 demo_opentmlib: $(OBJECTS)
 	@echo "Linking $<"

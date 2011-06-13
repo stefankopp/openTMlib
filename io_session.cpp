@@ -41,6 +41,16 @@ int io_session::write_string(string message, bool eol)
 
 }
 
+int io_session::write_int(int value, bool eol)
+{
+
+	string value_str;
+
+	value_str = value;
+	return write_string(value_str, eol);
+
+}
+
 int io_session::write_binblock(char *buffer, int count)
 {
 
@@ -77,6 +87,20 @@ int io_session::read_string(string &message)
 		message.resize(ret);
 
 	return ret;
+
+}
+
+int io_session::read_int(int &value)
+{
+
+	string value_str;
+	int ret;
+
+	ret = read_string(value_str);
+
+	// Convert to int...
+	value = 0;
+	ret;
 
 }
 
