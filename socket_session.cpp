@@ -35,8 +35,14 @@
 
 using namespace std;
 
-socket_session::socket_session(string address, unsigned short int port)
+socket_session::socket_session(string address, unsigned short int port, bool lock, unsigned int lock_timeout)
 {
+
+	if (lock == true)
+	{
+		throw -OPENTMLIB_ERROR_LOCKING_NOT_SUPPORTED;
+		return;
+	}
 
 	// Allocate memory for session buffer
 	if ((session_buffer_ptr = (char *) malloc(SOCKET_SESSION_LOCAL_BUFFER_SIZE)) == NULL)
@@ -86,6 +92,7 @@ socket_session::socket_session(string address, unsigned short int port)
 	timeout = 5; // 5 s
 	term_char_enable = 1; // Termination character enabled
 	term_character = '\n';
+	eol_char = '\n';
 	write_index = 0;
 
 	return;
@@ -281,6 +288,15 @@ int socket_session::set_attribute(unsigned int attribute, unsigned int value)
 	switch (attribute)
 	{
 
+	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
+		if (value > 255)
+		{
+			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
+			return -1;
+		}
+		eol_char = value;
+		break;
+
 	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
 		timeout = value;
 		break;
@@ -318,6 +334,10 @@ int socket_session::get_attribute(unsigned int attribute, unsigned int *value)
 
 	switch (attribute)
 	{
+
+	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
+		*value = eol_char;
+		break;
 
 	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
 		*value = timeout;

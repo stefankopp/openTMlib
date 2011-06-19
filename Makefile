@@ -9,7 +9,8 @@ OBJECTS += \
 	vxi11_clnt.o \
 	vxi11_xdr.o \
 	serial_session.o \
-	opentmlib.o
+	opentmlib.o \
+	configuration_store.o
 	
 demo_opentmlib: $(OBJECTS)
 	@echo "Linking $<"

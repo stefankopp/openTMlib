@@ -1,5 +1,5 @@
 /*
- * socket_session.hpp
+ * configuration_store.hpp
  * This file is part of an open-source test and measurement I/O library.
  * See documentation for details.
  *
@@ -19,33 +19,33 @@
  * http://www.gnu.org/copyleft/gpl.html.
  */
 
-#ifndef SOCKET_SESSION_HPP
-#define SOCKET_SESSION_HPP
+#ifndef CONFIGURATION_STORE_HPP
+#define CONFIGURATION_STORE_HPP
 
 #include <string>
-#include "io_session.hpp"
-
-#define SOCKET_SESSION_LOCAL_BUFFER_SIZE					1024
+#include <boost/tokenizer.hpp>
+#include <boost/lexical_cast.hpp>
 
 using namespace std;
 
-class socket_session : public io_session
+class configuration_store
 {
 
 public:
-	socket_session(string address, unsigned short int port, bool lock, unsigned int lock_timeout);
-	~socket_session();
-	int write_buffer(char *buffer, int count);
-	int read_buffer(char *buffer, int max);
-	int set_attribute(unsigned int attribute, unsigned int value);
-	int get_attribute(unsigned int attribute, unsigned int *value);
-	int io_operation(unsigned int operation, unsigned int value);
+	configuration_store(string store); // Constructor
+	~configuration_store(); // Destructor
+	void reload_store(); // Reload contents of configuration store
+	string lookup(string symbolic_name, vector<string> & keys_found, vector<string> & values_found); // Resolve symbolic name
 
 private:
-	int instrument_socket; // Socket descriptor
-	char *session_buffer_ptr; // Pointer to local session buffer
-	int write_index; // Write index into local session buffer
+	string store_file;
+	int file;
+	vector<string> keys;
+	vector<string> values;
+
+protected:
 
 };
 
 #endif
+

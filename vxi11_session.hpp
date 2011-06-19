@@ -41,17 +41,13 @@ public:
 	int io_operation(unsigned int operation, unsigned int value);
 
 private:
+	int throw_proper_error(int error_code);
 	CLIENT *vxi11_link; // Link to CORE RPC server
 	Device_Link device_link; // Handle to logical instrument
 	CLIENT * vxi11_abort_link; // Link to ASYNC RPC server
 	unsigned short abort_port; // Port number for abort channel
 	unsigned long int max_message_size; // Maximum message size
-	unsigned int timeout; // Timeout (s)
-	int term_char_enable; // Termination character enable status (0 = off, 1 = on)
-	unsigned char term_character; // Termination character
 	long last_operation_error; // Error code returned by last operation
-	unsigned int wait_lock; // Wait for lock (1) or return immediately (0)
-	unsigned int set_end_indicator; // Set end indicator with last byte written
 	int abort_socket;
 
 };

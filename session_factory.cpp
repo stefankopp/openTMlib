@@ -34,6 +34,17 @@ using namespace std;
 session_factory::session_factory()
 {
 
+	store = NULL;
+
+	return;
+
+}
+
+session_factory::session_factory(string config_store)
+{
+
+	store = new configuration_store(config_store);
+
 	return;
 
 }
@@ -41,11 +52,16 @@ session_factory::session_factory()
 session_factory::~session_factory()
 {
 
+	if (store != NULL)
+	{
+		delete store;
+	}
+
 	return;
 
 }
 
-void session_factory::uppercase(string & string_to_change)
+string & session_factory::uppercase(string & string_to_change)
 {
 
 	for(int i = 0; i < string_to_change.length(); i++)
@@ -53,15 +69,40 @@ void session_factory::uppercase(string & string_to_change)
 		string_to_change[i] = toupper(string_to_change[i]);
 	}
 
-	return;
+	return string_to_change;
 
 }
 
-io_session *session_factory::open_session(string resource, int mode, unsigned int timeout)
+io_session *session_factory::open_session(string resource, bool mode, unsigned int timeout)
 {
 
 	io_session *session;
 	int n, board;
+	vector<string> keys_found;
+	vector<string> values_found;
+
+	// Check if this is an alias
+	if (resource.find("::") == -1)
+	{
+		// No "::" found, check if string is in store
+		string temp = "";
+		try
+		{
+			temp = store->lookup(resource, keys_found, values_found);
+		}
+		catch (int e)
+		{
+			if (e != -OPENTMLIB_ERROR_CSTORE_BAD_ALIAS)
+			{
+				// Unexpected error... pass up
+				throw e;
+			}
+		}
+		if (temp != "")
+		{
+			resource = temp;
+		}
+	}
 
 	// Break resource string into individual components (separated by "::")
 	string remaining = resource;
@@ -75,14 +116,14 @@ io_session *session_factory::open_session(string resource, int mode, unsigned in
 		if (m == -1)
 		{
 			// No further "::", this is the last field
-			uppercase(remaining);
+			//uppercase(remaining);
 			pieces.push_back(remaining);
 		}
 		else
 		{
 			// There is another "::", get piece before
 			piece = remaining.substr(0, m);
-			uppercase(piece);
+			//uppercase(piece);
 			pieces.push_back(piece);
 			if (m + 2 < remaining.npos)
 			{
@@ -95,6 +136,7 @@ io_session *session_factory::open_session(string resource, int mode, unsigned in
 		}
 	}
 	while (m != -1);
+	uppercase(pieces[0]); // To simplify comparisons below
 
 	// Process resource string (serial instruments)
 	if ((n = pieces[0].find("ASRL")) != -1)
@@ -117,11 +159,11 @@ io_session *session_factory::open_session(string resource, int mode, unsigned in
 		{
 			board = 0;
 		}
-		if ((pieces.size() == 1) || (pieces.size() > 1) && (pieces[1] == "INSTR"))
+		if ((pieces.size() == 1) || (pieces.size() > 1) && (uppercase(pieces[1]) == "INSTR"))
 		{
 			try
 			{
-				session = new serial_session(board);
+				session = new serial_session(board, mode, 5);
 			}
 			catch (int e)
 			{
@@ -157,7 +199,7 @@ io_session *session_factory::open_session(string resource, int mode, unsigned in
 		{
 			board = 0;
 		}
-		if ((pieces.size() < 4) || (pieces.size() == 4) && (pieces[3] == "INSTR"))
+		if ((pieces.size() < 4) || (pieces.size() == 4) && (uppercase(pieces[3]) == "INSTR"))
 		{
 			// This is a VXI-11 instrument
 			string device;
@@ -165,7 +207,9 @@ io_session *session_factory::open_session(string resource, int mode, unsigned in
 				device = "inst0";
 			if (pieces.size() == 3)
 			{
-				if (pieces[2] != "INSTR")
+				// Not allowed to uppercase third field as VXI11 logical instrument name is case-sensitive
+				string temp = uppercase(pieces[2]);
+				if (temp != "INSTR")
 					device = pieces[2];
 				else
 					device = "inst0";
@@ -174,7 +218,7 @@ io_session *session_factory::open_session(string resource, int mode, unsigned in
 				device = pieces[2];
 			try
 			{
-				session = new vxi11_session(pieces[1], device, false, 5);
+				session = new vxi11_session(pieces[1], device, mode, 5);
 			}
 			catch (int e)
 			{
@@ -183,7 +227,7 @@ io_session *session_factory::open_session(string resource, int mode, unsigned in
 			}
 			goto session_created;
 		}
-		if ((pieces.size() == 4) && (pieces[3] == "SOCKET"))
+		if ((pieces.size() == 4) && (uppercase(pieces[3]) == "SOCKET"))
 		{
 			// Direct socket connection
 			int port;
@@ -200,7 +244,7 @@ io_session *session_factory::open_session(string resource, int mode, unsigned in
 			}
 			try
 			{
-				session = new socket_session(pieces[1], port);
+				session = new socket_session(pieces[1], port, mode, 5);
 			}
 			catch (int e)
 			{
@@ -239,7 +283,7 @@ io_session *session_factory::open_session(string resource, int mode, unsigned in
 		sscanf(pieces[1].c_str(), "%x", &mfg_id);
 		unsigned int model;
 		sscanf(pieces[2].c_str(), "%x", &model);
-		if ((pieces.size() == 6) || ((pieces.size() == 5) && (pieces[4] != "INSTR")))
+		if ((pieces.size() == 6) || ((pieces.size() == 5) && (uppercase(pieces[4]) != "INSTR")))
 		{
 			int interface;
 			istringstream stream(pieces[4]);
@@ -256,7 +300,7 @@ io_session *session_factory::open_session(string resource, int mode, unsigned in
 		}
 		try
 		{
-			session = new usbtmc_session(mfg_id, model, pieces[3]);
+			session = new usbtmc_session(mfg_id, model, pieces[3], mode, 5);
 		}
 		catch (int e)
 		{
@@ -274,8 +318,78 @@ session_created:
 
 	if (session != NULL)
 	{
-		// Default settings
+		// Set default settings
 		session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE, 1);
+		session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHARACTER, 10);
+		session->set_attribute(OPENTMLIB_ATTRIBUTE_EOL_CHAR, 10);
+		session->set_attribute(OPENTMLIB_ATTRIBUTE_TIMEOUT, 5);
+
+		// Apply settings found in configuration store
+
+		for (int k = 0; k < keys_found.size(); k++)
+		{
+			uppercase(keys_found[k]);
+			uppercase(values_found[k]);
+
+			if (keys_found[k] == "TERM_CHAR")
+			{
+				int term_char;
+				istringstream stream(values_found[k]);
+				if (!(stream >> term_char))
+				{
+					throw -OPENTMLIB_ERROR_CSTORE_BAD_VALUE;
+					return NULL;
+				}
+				session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHARACTER, term_char);
+			}
+
+			if (keys_found[k] == "TERM_CHAR_ENABLE")
+			{
+				if ((values_found[k] != "ON") && (values_found[k] != "OFF"))
+				{
+					throw -OPENTMLIB_ERROR_CSTORE_BAD_VALUE;
+					return NULL;
+				}
+				if (values_found[k] == "ON")
+				{
+					session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE, 1);
+				}
+				if (values_found[k] == "OFF")
+				{
+					session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE, 0);
+				}
+			}
+
+			if (keys_found[k] == "EOL_CHAR")
+			{
+				int c;
+				istringstream stream(values_found[k]);
+				if (!(stream >> c))
+				{
+					throw -OPENTMLIB_ERROR_CSTORE_BAD_VALUE;
+					return NULL;
+				}
+				if ((c < 0) || (c > 255))
+				{
+					throw -OPENTMLIB_ERROR_CSTORE_BAD_VALUE;
+					return NULL;
+				}
+				session->set_attribute(OPENTMLIB_ATTRIBUTE_EOL_CHAR, c);
+			}
+
+			if (keys_found[k] == "TIMEOUT")
+			{
+				int seconds;
+				istringstream stream(values_found[k]);
+				if (!(stream >> seconds))
+				{
+					throw -OPENTMLIB_ERROR_CSTORE_BAD_VALUE;
+					return NULL;
+				}
+				session->set_attribute(OPENTMLIB_ATTRIBUTE_TIMEOUT, seconds);
+			}
+
+		}
 	}
 
 	return session;

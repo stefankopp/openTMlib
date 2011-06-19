@@ -31,9 +31,11 @@ class usbtmc_session : public io_session
 {
 
 public:
-	usbtmc_session(unsigned short int mfg_id, unsigned short int model, string serial_number);
-	usbtmc_session(string manufacturer, string product, string serial_number);
-	usbtmc_session(int minor);
+	usbtmc_session(unsigned short int mfg_id, unsigned short int model, string serial_number, bool lock,
+		unsigned int lock_timeout);
+	usbtmc_session(string manufacturer, string product, string serial_number, bool lock,
+		unsigned int lock_timeout);
+	usbtmc_session(int minor, bool lock, unsigned int lock_timeout);
 	~usbtmc_session();
 	int write_buffer(char *buffer, int count);
 	int read_buffer(char *buffer, int max);

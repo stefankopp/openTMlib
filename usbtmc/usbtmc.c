@@ -29,6 +29,7 @@
 #include <linux/slab.h>
 
 #include "usbtmc.h"
+#include "../opentmlib.h"
 
 #define USBTMC_DEBUG
 
@@ -192,14 +193,14 @@ int usbtmc_verify_state(struct usbtmc_device_data *p_device_data, int driver_sta
 	if (p_device_data == NULL)
 	{
 		PDEBUG("Minor number not in use\n");
-		return -USBTMC_MINOR_NUMBER_UNUSED;
+		return -OPENTMLIB_ERROR_USBTMC_MINOR_NUMBER_UNUSED;
 	}
 
 	/* Verify if driver is in correct state */
 	if (p_device_data->driver_state != driver_state)
 	{
 		PDEBUG("Wrong driver state\n");
-		return -USBTMC_WRONG_DRIVER_STATE;
+		return -OPENTMLIB_ERROR_USBTMC_WRONG_DRIVER_STATE;
 	}
 
 	return 0; // No error
@@ -343,9 +344,9 @@ ssize_t usbtmc_read(struct file *filp, char __user *buf, size_t count, loff_t *f
 
 		/* Check if remaining data bytes to be read fit in the driver's buffer. Make sure there is enough
 		 * space for the header (12 bytes) and alignment bytes (up to 3 bytes). */
-		if (remaining > USBTMC_SIZE_IOBUFFER - 12 - 4)
+		if (remaining > USBTMC_SIZE_IOBUFFER - 12 - 3)
 		{
-			this_part = USBTMC_SIZE_IOBUFFER - 12 - 4;
+			this_part = USBTMC_SIZE_IOBUFFER - 12 - 3;
 		}
 		else
 		{
@@ -353,14 +354,14 @@ ssize_t usbtmc_read(struct file *filp, char __user *buf, size_t count, loff_t *f
 		}
 		
 		/* Setup IO buffer for DEV_DEP_MSG_IN message */
-		usbtmc_buffer[0x00] = USBTMC_MSGID_DEV_DEP_MSG_IN;
+		usbtmc_buffer[0x00] = USBTMC_MSGID_REQUEST_DEV_DEP_MSG_IN;
 		usbtmc_buffer[0x01] = p_device_data->bTag; /* Transfer ID (bTag) */
 		usbtmc_buffer[0x02] = ~(p_device_data->bTag); /* Inverse of bTag */
 		usbtmc_buffer[0x03] = 0; /* Reserved */
-		usbtmc_buffer[0x04] = (this_part - 12 - 4) & 255; /* Max transfer (first byte) */
-		usbtmc_buffer[0x05] = ((this_part - 12 - 4) >> 8) & 255; /* Second byte */
-		usbtmc_buffer[0x06] = ((this_part - 12 - 4) >> 16) & 255; /* Third byte */
-		usbtmc_buffer[0x07] = ((this_part - 12 - 4) >> 24) & 255; /* Fourth byte */
+		usbtmc_buffer[0x04] = this_part & 255; /* Max transfer (first byte) */
+		usbtmc_buffer[0x05] = (this_part >> 8) & 255; /* Second byte */
+		usbtmc_buffer[0x06] = (this_part >> 16) & 255; /* Third byte */
+		usbtmc_buffer[0x07] = (this_part >> 24) & 255; /* Fourth byte */
 		usbtmc_buffer[0x08] = p_device_data->term_char_enabled * 2;
 		usbtmc_buffer[0x09] = p_device_data->term_char; /* Term character */
 		usbtmc_buffer[0x0a] = 0; /* Reserved */
@@ -382,7 +383,7 @@ ssize_t usbtmc_read(struct file *filp, char __user *buf, size_t count, loff_t *f
 		if (ret < 0)
 		{
 			PDEBUG("usb_bulk_msg() returned %d\n", ret);
-			return -USBTMC_BULK_OUT_ERROR;
+			return ret;
 		}
 	
 		/* Create pipe and send USB request */
@@ -396,7 +397,7 @@ ssize_t usbtmc_read(struct file *filp, char __user *buf, size_t count, loff_t *f
 		if (ret < 0)
 		{
 			PDEBUG("usb_bulk_msg() returned %d\n", ret);
-			return -USBTMC_BULK_IN_ERROR;
+			return ret;
 		}
 	
 		/* How many characters did the instrument send? */
@@ -407,12 +408,12 @@ ssize_t usbtmc_read(struct file *filp, char __user *buf, size_t count, loff_t *f
 		if (copy_to_user(buf + done, &usbtmc_buffer[12], num_of_characters))
 		{
 			/* There must have been an addressing problem */
-			return -USBTMC_MEMORY_ACCESS_ERROR;
+			return -OPENTMLIB_ERROR_USBTMC_MEMORY_ACCESS_ERROR;
 		}
 		
 		done += num_of_characters;
 
-		if (num_of_characters < this_part - 12 - 4)
+		if (num_of_characters < this_part)
 		{
 			/* Short package received (less than requested amount of bytes), exit loop */
 			remaining = 0;
@@ -434,7 +435,7 @@ minor_null:
 	if (copy_to_user(buf, &usbtmc_buffer[0], p_device_data->number_of_bytes))
 	{
 		/* There must have been an addressing problem */
-		return -USBTMC_MEMORY_ACCESS_ERROR;
+		return -OPENTMLIB_ERROR_USBTMC_MEMORY_ACCESS_ERROR;
 	}
 
 	ret = p_device_data->number_of_bytes;
@@ -505,7 +506,7 @@ ssize_t usbtmc_write(struct file *filp, const char __user *buf, size_t count, lo
 		if (copy_from_user(&usbtmc_buffer[12], buf + done, this_part))
 		{
 			/* There must have been an addressing problem */
-			return -USBTMC_MEMORY_ACCESS_ERROR;
+			return -OPENTMLIB_ERROR_USBTMC_MEMORY_ACCESS_ERROR;
 		}	
 		
 		/* Add zero bytes to achieve 4-byte alignment */
@@ -514,7 +515,7 @@ ssize_t usbtmc_write(struct file *filp, const char __user *buf, size_t count, lo
 		{
 			num_of_bytes += 4 - this_part % 4;
 			for (n = 12 + this_part; n < num_of_bytes; n++)
-				usbtmc_buffer[n]=0;
+				usbtmc_buffer[n] = 0;
 		}
 	
 		/* Create pipe and send USB request */
@@ -533,7 +534,7 @@ ssize_t usbtmc_write(struct file *filp, const char __user *buf, size_t count, lo
 		if (ret < 0)
 		{
 			PDEBUG("usb_bulk_msg() returned %d\n", ret);
-			return -USBTMC_BULK_OUT_ERROR;
+			return ret;
 		}
 		
 		remaining -= this_part;
@@ -550,25 +551,25 @@ minor_null:
 	/* Make sure message has the right size */
 	if (count != sizeof(struct usbtmc_io_control))
 	{
-		return -USBTMC_WRONG_CONTROL_MESSAGE_SIZE;
+		return -OPENTMLIB_ERROR_USBTMC_WRONG_CONTROL_MESSAGE_SIZE;
 	}
 
 	/* Copy message to local structure */
 	if (copy_from_user(&control_message, buf, sizeof(struct usbtmc_io_control)))
 	{
-		return -USBTMC_MEMORY_ACCESS_ERROR;
+		return -OPENTMLIB_ERROR_USBTMC_MEMORY_ACCESS_ERROR;
 	}
 
 	/* Make sure minor number given is in range */
 	if (control_message.minor_number > USBTMC_MAX_DEVICES)
 	{
-		return -USBTMC_MINOR_NUMBER_OUT_OF_RANGE;
+		return -OPENTMLIB_ERROR_USBTMC_MINOR_OUT_OF_RANGE;
 	}
 
 	/* Make sure minor number given is in use */
 	if (usbtmc_devs[control_message.minor_number] == NULL)
 	{
-		return -USBTMC_MINOR_NUMBER_UNUSED;
+		return -OPENTMLIB_ERROR_USBTMC_MINOR_NUMBER_UNUSED;
 	}
 
 	/* Dispatch message */
@@ -611,7 +612,7 @@ int usbtmc_dispatch_control_message(struct usbtmc_io_control *control_message)
 		return usbtmc_control_io_operation(control_message);
 
 	default:
-		return -USBTMC_INVALID_REQUEST;
+		return -OPENTMLIB_ERROR_USBTMC_INVALID_REQUEST;
 
 	}
 
@@ -624,7 +625,7 @@ minor_null:
 		return usbtmc_control_report_instrument(control_message);
 
 	default:
-		return -USBTMC_INVALID_REQUEST;
+		return -OPENTMLIB_ERROR_USBTMC_INVALID_REQUEST;
 
 	}
 
@@ -652,14 +653,14 @@ int usbtmc_control_report_instrument(struct usbtmc_io_control *control_message)
 
 	/* Check argument (minor number) */
 	if ((control_message->argument == 0) || (control_message->argument > USBTMC_MAX_DEVICES))
-		return -USBTMC_MINOR_NUMBER_OUT_OF_RANGE;
+		return -OPENTMLIB_ERROR_USBTMC_MINOR_OUT_OF_RANGE;
 
 	/* Get pointer to private data structure */
 	p_device_data = usbtmc_devs[control_message->argument];
 	
 	/* Make sure this device exists */
 	if (p_device_data == NULL)
-		return -USBTMC_MINOR_NUMBER_UNUSED;
+		return -OPENTMLIB_ERROR_USBTMC_MINOR_NUMBER_UNUSED;
 
 	/* Fill structure */
 	p_device = interface_to_usbdev(p_device_data->intf);
@@ -690,41 +691,41 @@ int usbtmc_control_io_operation(struct usbtmc_io_control *control_message)
 	switch (control_message->argument)
 	{
 
-	case USBTMC_IO_OP_INDICATOR_PULSE:
+	case OPENTMLIB_OPERATION_INDICATOR_PULSE:
 		return usbtmc_indicator_pulse(control_message);
 
-	case USBTMC_IO_OP_ABORT_WRITE:
+	case OPENTMLIB_OPERATION_USBTMC_ABORT_WRITE:
 		return usbtmc_abort_bulk_out(control_message);
 
-	case USBTMC_IO_OP_ABORT_READ:
+	case OPENTMLIB_OPERATION_USBTMC_ABORT_READ:
 		return usbtmc_abort_bulk_in(control_message);
 
-	case USBTMC_IO_OP_USB_CLEAR_OUT_HALT:
+	case OPENTMLIB_OPERATION_USBTMC_CLEAR_OUT_HALT:
 		return usbtmc_clear_out_halt(control_message);
 
-	case USBTMC_IO_OP_USB_CLEAR_IN_HALT:
+	case OPENTMLIB_OPERATION_USBTMC_CLEAR_IN_HALT:
 		return usbtmc_clear_in_halt(control_message);
 
-	case USBTMC_IO_OP_RESET:
+	case OPENTMLIB_OPERATION_USBTMC_RESET:
 		return usbtmc_reset_conf(control_message);
 
-	case USBTMC_IO_OP_CLEAR:
+	case OPENTMLIB_OPERATION_CLEAR:
 		return usbtmc_clear(control_message);
 
-	case USBTMC_IO_OP_TRIGGER:
+	case OPENTMLIB_OPERATION_TRIGGER:
 		return usbtmc_trigger(control_message);
 
-	case USBTMC_IO_OP_REN_CONTROL:
+	case OPENTMLIB_OPERATION_USBTMC_REN_CONTROL:
 		return usbtmc_ren_control(control_message);
 
-	case USBTMC_IO_OP_GO_TO_LOCAL:
+	case OPENTMLIB_OPERATION_USBTMC_GO_TO_LOCAL:
 		return usbtmc_go_to_local(control_message);
 
-	case USBTMC_IO_OP_LOCAL_LOCKOUT:
+	case OPENTMLIB_OPERATION_USBTMC_LOCAL_LOCKOUT:
 		return usbtmc_local_lockout(control_message);
 
 	default:
-		return -USBTMC_INVALID_OP_CODE;
+		return -OPENTMLIB_ERROR_USBTMC_INVALID_OP_CODE;
 
 	}
 
@@ -773,7 +774,7 @@ int usbtmc_trigger(struct usbtmc_io_control *control_message)
 	if (ret < 0)
 	{
 		PDEBUG("usb_bulk_msg() returned %d\n", ret);
-		return -USBTMC_BULK_OUT_ERROR;
+		return ret;
 	}
 
 	return USBTMC_NO_ERROR;
@@ -813,13 +814,13 @@ int usbtmc_get_stb(struct usbtmc_io_control *control_message, unsigned int *valu
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg() returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 			
 	if (usbtmc_buffer[0] != USBTMC_STATUS_SUCCESS)
 	{
 		PDEBUG("READ_STATUS_BYTE returned %x\n", usbtmc_buffer[0]);
-		return -USBTMC_STATUS_UNSUCCESSFUL;
+		return -OPENTMLIB_ERROR_USBTMC_STATUS_UNSUCCESSFUL;
 	}
 	
 	*value = usbtmc_buffer[3];
@@ -827,7 +828,7 @@ int usbtmc_get_stb(struct usbtmc_io_control *control_message, unsigned int *valu
 	if (p_device_data->interrupt_in_endpoint != 0)
 	{
 		/* Device has an interrupt in endpoint, so the STB value is delivered through it */
-		return -USBTMC_FEATURE_NOT_SUPPORTED;
+		return -OPENTMLIB_ERROR_USBTMC_FEATURE_NOT_SUPPORTED;
 		/* TODO: Add support for int in endpoint */
 	}
 
@@ -859,17 +860,17 @@ int usbtmc_abort_bulk_in(struct usbtmc_io_control *control_message)
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 	
 	if (usbtmc_buffer[0] == USBTMC_STATUS_FAILED)
 	{
-		return -USBTMC_NO_TRANSFER;
+		return -OPENTMLIB_ERROR_USBTMC_NO_TRANSFER;
 	}
 		
 	if (usbtmc_buffer[0] != USBTMC_STATUS_SUCCESS)
 	{
-		return -USBTMC_NO_TRANSFER_IN_PROGRESS;
+		return -OPENTMLIB_ERROR_USBTMC_NO_TRANSFER_IN_PROGRESS;
 	}
 			
 	/* Get wMaxPacketSize */
@@ -880,7 +881,7 @@ int usbtmc_abort_bulk_in(struct usbtmc_io_control *control_message)
 			max_size = current_setting->endpoint[n].desc.wMaxPacketSize;
 	if (max_size == 0)
 	{
-		return -USBTMC_UNABLE_TO_GET_WMAXPACKETSIZE;
+		return -OPENTMLIB_ERROR_USBTMC_UNABLE_TO_GET_WMAXPACKETSIZE;
 	}
 	PDEBUG("wMaxPacketSize is %d\n", max_size);
 			
@@ -899,7 +900,7 @@ int usbtmc_abort_bulk_in(struct usbtmc_io_control *control_message)
 		if (ret < 0)
 		{
 			PDEBUG("usb_bulk_msg returned %d\n", ret);
-			return -USBTMC_BULK_IN_ERROR;
+			return ret;
 		}
 
 	}
@@ -907,7 +908,7 @@ int usbtmc_abort_bulk_in(struct usbtmc_io_control *control_message)
 			
 	if (actual == max_size)
 	{
-		return -USBTMC_UNABLE_TO_CLEAR_BULK_IN;
+		return -OPENTMLIB_ERROR_USBTMC_UNABLE_TO_CLEAR_BULK_IN;
 	}
 			
 	n = 0;
@@ -923,7 +924,7 @@ usbtmc_abort_bulk_in_status:
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 			
 	if (usbtmc_buffer[0] == USBTMC_STATUS_SUCCESS)
@@ -932,7 +933,7 @@ usbtmc_abort_bulk_in_status:
 	if (usbtmc_buffer[0] != USBTMC_STATUS_PENDING)
 	{
 		PDEBUG("INITIATE_ABORT_BULK_IN returned %x\n", usbtmc_buffer[0]);
-		return -USBTMC_UNEXPECTED_STATUS;
+		return -OPENTMLIB_ERROR_USBTMC_UNEXPECTED_STATUS;
 	}
 	
 	/* Is there data to read off the device? */
@@ -950,7 +951,7 @@ usbtmc_abort_bulk_in_status:
 			if (ret < 0)
 			{
 				PDEBUG("usb_bulk_msg returned %d\n", ret);
-				return -USBTMC_BULK_IN_ERROR;
+				return ret;
 			}
 
 		}
@@ -958,7 +959,7 @@ usbtmc_abort_bulk_in_status:
 				
 	if (actual == max_size)
 	{
-		return -USBTMC_UNABLE_TO_CLEAR_BULK_IN;
+		return -OPENTMLIB_ERROR_USBTMC_UNABLE_TO_CLEAR_BULK_IN;
 	}
 
 	/* Device should be clear at this point. Now check status again! */
@@ -989,19 +990,19 @@ int usbtmc_abort_bulk_out(struct usbtmc_io_control *control_message)
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg() returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 
 
 
 	if (usbtmc_buffer[0] == USBTMC_STATUS_FAILED)
 	{
-		return -USBTMC_NO_TRANSFER;
+		return -OPENTMLIB_ERROR_USBTMC_NO_TRANSFER;
 	}
 		
 	if (usbtmc_buffer[0] != USBTMC_STATUS_SUCCESS)
 	{
-		return -USBTMC_NO_TRANSFER_IN_PROGRESS;
+		return -OPENTMLIB_ERROR_USBTMC_NO_TRANSFER_IN_PROGRESS;
 	}
 			
 	n = 0;
@@ -1019,7 +1020,7 @@ usbtmc_abort_bulk_out_check_status:
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 			
 	if (usbtmc_buffer[0] == USBTMC_STATUS_SUCCESS)
@@ -1029,7 +1030,7 @@ usbtmc_abort_bulk_out_check_status:
 		goto usbtmc_abort_bulk_out_check_status;
 			
 	PDEBUG("CHECK_ABORT_BULK_OUT returned %x\n", usbtmc_buffer[0]);
-	return -USBTMC_UNEXPECTED_STATUS;
+	return -OPENTMLIB_ERROR_USBTMC_UNEXPECTED_STATUS;
 			
 usbtmc_abort_bulk_out_clear_halt:
 
@@ -1042,7 +1043,7 @@ usbtmc_abort_bulk_out_clear_halt:
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_OUT_ERROR;
+		return ret;
 	}
 			
 	return USBTMC_NO_ERROR;
@@ -1073,13 +1074,13 @@ int usbtmc_clear(struct usbtmc_io_control *control_message)
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg() returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 			
 	if (usbtmc_buffer[0] != USBTMC_STATUS_SUCCESS)
 	{
 		PDEBUG("INITIATE_CLEAR returned %x\n", usbtmc_buffer[0]);
-		return -USBTMC_STATUS_UNSUCCESSFUL;
+		return -OPENTMLIB_ERROR_USBTMC_STATUS_UNSUCCESSFUL;
 	}
 
 	/* Get wMaxPacketSize */
@@ -1090,7 +1091,7 @@ int usbtmc_clear(struct usbtmc_io_control *control_message)
 			max_size = current_setting->endpoint[n].desc.wMaxPacketSize;
 	if (max_size == 0)
 	{
-		return -USBTMC_UNABLE_TO_GET_WMAXPACKETSIZE;
+		return -OPENTMLIB_ERROR_USBTMC_UNABLE_TO_GET_WMAXPACKETSIZE;
 	}
 	PDEBUG("wMaxPacketSize is %d\n", max_size);
 	
@@ -1107,7 +1108,7 @@ usbtmc_clear_check_status:
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 			
 	if (usbtmc_buffer[0] == USBTMC_STATUS_SUCCESS)
@@ -1119,7 +1120,7 @@ usbtmc_clear_check_status:
 	if (usbtmc_buffer[0] != USBTMC_STATUS_PENDING)
 	{
 		PDEBUG("CHECK_CLEAR_STATUS returned %x\n", usbtmc_buffer[0]);
-		return -USBTMC_UNEXPECTED_STATUS;
+		return -OPENTMLIB_ERROR_USBTMC_UNEXPECTED_STATUS;
 	}
 	
 	/* Check bmClear field to see if data needs to be read off the device */
@@ -1142,7 +1143,7 @@ usbtmc_clear_check_status:
 			if (ret < 0)
 			{
 				PDEBUG("usb_control_msg returned %d\n", ret);
-				return -USBTMC_BULK_IN_ERROR;
+				return ret;
 			}
 
 		}
@@ -1151,7 +1152,7 @@ usbtmc_clear_check_status:
 	if (actual == max_size)
 	{
 		PDEBUG("Couldn't clear device buffer within %d cycles\n", USBTMC_MAX_READS_TO_CLEAR_BULK_IN);
-		return -USBTMC_UNABLE_TO_CLEAR_BULK_IN;
+		return -OPENTMLIB_ERROR_USBTMC_UNABLE_TO_CLEAR_BULK_IN;
 	}
 			
 	/* Device should be clear at this point. Now check status again! */
@@ -1170,7 +1171,7 @@ usbtmc_clear_bulk_out_halt:
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_OUT_ERROR;
+		return ret;
 	}
 			
 	return 0;
@@ -1191,25 +1192,25 @@ int usbtmc_control_set_attribute(struct usbtmc_io_control *control_message)
 	switch (control_message->argument)
 	{
 
-	case USBTMC_ATTRIBUTE_TIMEOUT:
-		p_device_data->timeout = control_message->value;
+	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
+		p_device_data->timeout = control_message->value * HZ; // Timeout value in jiffies
 		break;
 
-	case USBTMC_ATTRIBUTE_TERMCHAR_ENABLE:
+	case OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE:
 		if ((control_message->value != 0) && (control_message->value != 1))
-			return -USBTMC_INVALID_ATTRIBUTE_VALUE;
+			return -OPENTMLIB_ERROR_USBTMC_INVALID_ATTRIBUTE_VALUE;
 		p_device_data->term_char_enabled = control_message->value;
 		break;
 
-	case USBTMC_ATTRIBUTE_TERMCHAR:
+	case OPENTMLIB_ATTRIBUTE_TERM_CHARACTER:
 		if ((control_message->value < 0) || (control_message->value > 255))
-			return -USBTMC_INVALID_ATTRIBUTE_VALUE;
+			return -OPENTMLIB_ERROR_USBTMC_INVALID_ATTRIBUTE_VALUE;
 		p_device_data->term_char = control_message->value;
 		break;
 				
 	default:
 		/* Bad attribute or read-only */
-		return -USBTMC_INVALID_ATTRIBUTE_CODE;
+		return -OPENTMLIB_ERROR_USBTMC_INVALID_ATTRIBUTE_CODE;
 
 	}
 		
@@ -1233,45 +1234,45 @@ int usbtmc_control_get_attribute(struct usbtmc_io_control *control_message)
 	switch (control_message->argument)
 	{
 
-	case USBTMC_ATTRIBUTE_TIMEOUT:
-		value = p_device_data->timeout;
+	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
+		value = p_device_data->timeout / HZ; // Back to s from jiffies
 		break;
 
-	case USBTMC_ATTRIBUTE_TERMCHAR_ENABLE:
+	case OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE:
 		value = p_device_data->term_char_enabled;
 		break;
 		
-	case USBTMC_ATTRIBUTE_TERMCHAR:
+	case OPENTMLIB_ATTRIBUTE_TERM_CHARACTER:
 		value = p_device_data->term_char;
 		break;
 		
-	case USBTMC_ATTRIBUTE_INTERFACE_CAPABILITIES:
+	case OPENTMLIB_ATTRIBUTE_USBTMC_INTERFACE_CAPS:
 		usbtmc_get_capabilities(control_message, &caps);
 		value = caps.interface_capabilities;
 		break;
 
-	case USBTMC_ATTRIBUTE_DEVICE_CAPABILITIES:
+	case OPENTMLIB_ATTRIBUTE_USBTMC_DEVICE_CAPS:
 		usbtmc_get_capabilities(control_message, &caps);
 		value = caps.device_capabilities;
 		break;
 
-	case USBTMC_ATTRIBUTE_USB488_INTERFACE_CAPABILITIES:
+	case OPENTMLIB_ATTRIBUTE_USBTMC_488_INTERFACE_CAPS:
 		usbtmc_get_capabilities(control_message, &caps);
 		value = caps.usb488_interface_capabilities;
 		break;
 
-	case USBTMC_ATRIBUTE_USB488_DEVICE_CAPABILITIES:
+	case OPENTMLIB_ATTRIBUTE_USBTMC_488_DEVICE_CAPS:
 		usbtmc_get_capabilities(control_message, &caps);
 		value = caps.usb488_device_capabilities;
 		break;
 
-	case USBTMC_ATTRIBUTE_STATUS_BYTE:
+	case OPENTMLIB_ATTRIBUTE_STATUS_BYTE:
 		usbtmc_get_stb(control_message, &value);
 		value = 0;
 		break;
 		
 	default:
-		return -USBTMC_INVALID_ATTRIBUTE_CODE;
+		return -OPENTMLIB_ERROR_USBTMC_INVALID_ATTRIBUTE_CODE;
 		
 	}
 	
@@ -1305,7 +1306,7 @@ int usbtmc_clear_out_halt(struct usbtmc_io_control *control_message)
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_OUT_ERROR;
+		return ret;
 	}
 
 	return USBTMC_NO_ERROR;
@@ -1334,7 +1335,7 @@ int usbtmc_clear_in_halt(struct usbtmc_io_control *control_message)
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_OUT_ERROR;
+		return ret;
 	}
 	
 	return 0;
@@ -1364,7 +1365,7 @@ int usbtmc_get_capabilities(struct usbtmc_io_control *control_message, struct us
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 			
 	PDEBUG("GET_CAPABILITIES returned %x\n", usbtmc_buffer[0]);
@@ -1376,7 +1377,7 @@ int usbtmc_get_capabilities(struct usbtmc_io_control *control_message, struct us
 	if (usbtmc_buffer[0] != USBTMC_STATUS_SUCCESS)
 	{
 		PDEBUG("GET_CAPABILITIES returned %x\n", usbtmc_buffer[0]);
-		return -USBTMC_STATUS_UNSUCCESSFUL;
+		return -OPENTMLIB_ERROR_USBTMC_STATUS_UNSUCCESSFUL;
 	}
 
 	caps->interface_capabilities = usbtmc_buffer[4];
@@ -1410,13 +1411,13 @@ int usbtmc_indicator_pulse(struct usbtmc_io_control *control_message)
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg() returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 
 	if (usbtmc_buffer[0] != USBTMC_STATUS_SUCCESS)
 	{
 		PDEBUG("INDICATOR_PULSE returned %x\n", usbtmc_buffer[0]);
-		return -USBTMC_STATUS_UNSUCCESSFUL;
+		return -OPENTMLIB_ERROR_USBTMC_STATUS_UNSUCCESSFUL;
 	}
 			
 	return USBTMC_NO_ERROR;
@@ -1439,7 +1440,7 @@ int usbtmc_ren_control(struct usbtmc_io_control *control_message)
 	/* Make sure value is in range */
 	if (control_message->value > 1)
 	{
-		return -USBTMC_INVALID_PARAMETER;
+		return -OPENTMLIB_ERROR_USBTMC_INVALID_PARAMETER;
 	}
 
 	/* Create pipe and send USB request */
@@ -1451,13 +1452,13 @@ int usbtmc_ren_control(struct usbtmc_io_control *control_message)
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 
 	if (usbtmc_buffer[0] != USBTMC_STATUS_SUCCESS)
 	{
 		PDEBUG("REN_CONTROL returned %x\n", usbtmc_buffer[0]);
-		return -USBTMC_STATUS_UNSUCCESSFUL;
+		return -OPENTMLIB_ERROR_USBTMC_STATUS_UNSUCCESSFUL;
 	}
 
 	return USBTMC_NO_ERROR;
@@ -1486,13 +1487,13 @@ int usbtmc_go_to_local(struct usbtmc_io_control *control_message)
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 
 	if (usbtmc_buffer[0] != USBTMC_STATUS_SUCCESS)
 	{
 		PDEBUG("GO_TO_LOCAL returned %x\n", usbtmc_buffer[0]);
-		return -USBTMC_STATUS_UNSUCCESSFUL;
+		return -OPENTMLIB_ERROR_USBTMC_STATUS_UNSUCCESSFUL;
 	}
 
 	return USBTMC_NO_ERROR;
@@ -1521,13 +1522,13 @@ int usbtmc_local_lockout(struct usbtmc_io_control *control_message)
 	if (ret < 0)
 	{
 		PDEBUG("usb_control_msg returned %d\n", ret);
-		return -USBTMC_CONTROL_IN_ERROR;
+		return ret;
 	}
 
 	if (usbtmc_buffer[0] != USBTMC_STATUS_SUCCESS)
 	{
 		PDEBUG("LOCAL_LOCKOUT returned %x\n", usbtmc_buffer[0]);
-		return -USBTMC_STATUS_UNSUCCESSFUL;
+		return -OPENTMLIB_ERROR_USBTMC_STATUS_UNSUCCESSFUL;
 	}
 
 	return USBTMC_NO_ERROR;
@@ -1552,7 +1553,7 @@ int usbtmc_reset_conf(struct usbtmc_io_control *control_message)
 	if (ret < 0)
 	{
 		PDEBUG("usb_reset_configuration returned %d\n", ret);
-		return -USBTMC_RESET_ERROR;
+		return ret;
 	}
 	
 	return USBTMC_NO_ERROR;

@@ -35,18 +35,11 @@
 
 using namespace std;
 
-vxi11_session::vxi11_session(string address, string logical_name, bool lock, unsigned int timeout_val)
+vxi11_session::vxi11_session(string address, string logical_name, bool lock, unsigned int lock_timeout)
 {
 
 	Create_LinkParms create_link_parms;
 	Create_LinkResp *create_link_response;
-
-	// Initialize member variables
-	timeout = timeout_val;
-	term_char_enable = 1; // Termination character enabled
-	term_character = '\n'; // Termination character
-	wait_lock = 0; // Wait for lock (1) or return immediately (0)
-	set_end_indicator = 0; // Set end indicator with last byte written
 
 	// Initialize connection to VXI-11 RPC server in the instrument
 	if ((vxi11_link = clnt_create(address.c_str(), DEVICE_CORE, DEVICE_CORE_VERSION, "tcp")) == NULL)
@@ -58,7 +51,7 @@ vxi11_session::vxi11_session(string address, string logical_name, bool lock, uns
 	// Initialize VXI-11 link to logical device
 	create_link_parms.clientId = 0; // Not used
 	create_link_parms.lockDevice = lock; // Do or don't lock device
-	create_link_parms.lock_timeout = timeout * 1000; // Timeout in ms
+	create_link_parms.lock_timeout = lock_timeout * 1000; // Timeout in ms
 	create_link_parms.device = (char *) logical_name.c_str();
 	if ((create_link_response = create_link_1(&create_link_parms, vxi11_link)) == NULL)
 	{
@@ -68,12 +61,15 @@ vxi11_session::vxi11_session(string address, string logical_name, bool lock, uns
 	}
 
 	if (create_link_response->error != 0)
-	{
-		throw -OPENTMLIB_ERROR_VXI11_LINK;
-		last_operation_error = create_link_response->error;
-		clnt_destroy(vxi11_link);
-		return;
-	}
+		{
+			last_operation_error = create_link_response->error;
+			if (throw_proper_error(create_link_response->error) == -1)
+			{
+				throw -OPENTMLIB_ERROR_VXI11_LINK;
+			}
+			clnt_destroy(vxi11_link);
+			return;
+		}
 
 	// Store link ID, abort port etc. for later
 	device_link = create_link_response->lid;
@@ -94,6 +90,12 @@ vxi11_session::vxi11_session(string address, string logical_name, bool lock, uns
 		clnt_destroy(vxi11_link);
 		return;
 	}
+
+	// Initialize member variables
+	timeout = 5; // 5 s
+	term_char_enable = 1; // Termination character enabled
+	term_character = '\n';
+	eol_char = '\n';
 
 	return;
 
@@ -158,8 +160,11 @@ int vxi11_session::write_buffer(char *buffer, int count)
 
 		if (write_response->error != 0)
 		{
-			throw -OPENTMLIB_ERROR_VXI11_WRITE;
 			last_operation_error = write_response->error;
+			if (throw_proper_error(write_response->error) == -1)
+			{
+				throw -OPENTMLIB_ERROR_VXI11_WRITE;
+			}
 			return -1;
 		}
 
@@ -201,8 +206,11 @@ int vxi11_session::read_buffer(char *buffer, int max)
 
 	if (read_response->error != 0)
 	{
-		throw -OPENTMLIB_ERROR_VXI11_WRITE;
 		last_operation_error = read_response->error;
+		if (throw_proper_error(read_response->error) == -1)
+		{
+			throw -OPENTMLIB_ERROR_VXI11_READ;
+		}
 		return -1;
 	}
 
@@ -218,6 +226,15 @@ int vxi11_session::set_attribute(unsigned int attribute, unsigned int value)
 
 	switch (attribute)
 	{
+
+	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
+		if (value > 255)
+		{
+			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
+			return -1;
+		}
+		eol_char = value;
+		break;
 
 	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
 		timeout = value;
@@ -241,7 +258,7 @@ int vxi11_session::set_attribute(unsigned int attribute, unsigned int value)
 		term_character = value;
 		break;
 
-	case OPENTMLIB_ATTRIBUTE_VXI11_WAIT_LOCK:
+	case OPENTMLIB_ATTRIBUTE_WAIT_LOCK:
 		if (value > 1)
 		{
 			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
@@ -274,6 +291,10 @@ int vxi11_session::get_attribute(unsigned int attribute, unsigned int *value)
 
 	switch (attribute)
 	{
+
+	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
+		*value = eol_char;
+		break;
 
 	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
 		*value = timeout;
@@ -308,9 +329,13 @@ int vxi11_session::get_attribute(unsigned int attribute, unsigned int *value)
 				return -1;
 			}
 
-			if (response->error == 8)
+			if (response->error != 0)
 			{
-				throw -OPENTMLIB_ERROR_VXI11_OP_UNSUPPORTED;
+				last_operation_error = response->error;
+				if (throw_proper_error(response->error) == -1)
+				{
+					throw -OPENTMLIB_ERROR_VXI11_READ_STB;
+				}
 				return -1;
 			}
 
@@ -322,7 +347,7 @@ int vxi11_session::get_attribute(unsigned int attribute, unsigned int *value)
 		*value = max_message_size;
 		break;
 
-	case OPENTMLIB_ATTRIBUTE_VXI11_WAIT_LOCK:
+	case OPENTMLIB_ATTRIBUTE_WAIT_LOCK:
 		*value = wait_lock;
 		break;
 
@@ -350,17 +375,27 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 	switch (operation)
 	{
 
-	case OPENTMLIB_OPERATION_VXI11_ABORT:
+	case OPENTMLIB_OPERATION_ABORT:
 		{
 			Device_Error *response;
 
+			// TODO: Returns NULL, need to find our why!
 			if ((response = device_abort_1(&device_link, vxi11_abort_link)) == NULL)
 			{
 				throw -OPENTMLIB_ERROR_VXI11_RPC;
 				return -1;
 			}
 
-			last_operation_error = response->error; // In case we need it later
+			if (response->error != 0)
+			{
+				last_operation_error = response->error;
+				if (throw_proper_error(response->error) == -1)
+				{
+					throw -OPENTMLIB_ERROR_VXI11_ABORT;
+				}
+				return -1;
+			}
+
 		}
 		break;
 
@@ -385,7 +420,16 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				return -1;
 			}
 
-			last_operation_error = response->error; // In case we need it later
+			if (response->error != 0)
+			{
+				last_operation_error = response->error;
+				if (throw_proper_error(response->error) == -1)
+				{
+					throw -OPENTMLIB_ERROR_VXI11_TRIGGER;
+				}
+				return -1;
+			}
+
 		}
 		break;
 
@@ -410,7 +454,16 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				return -1;
 			}
 
-			last_operation_error = response->error; // In case we need it later
+			if (response->error != 0)
+			{
+				last_operation_error = response->error;
+				if (throw_proper_error(response->error) == -1)
+				{
+					throw -OPENTMLIB_ERROR_VXI11_CLEAR;
+				}
+				return -1;
+			}
+
 		}
 		break;
 
@@ -435,7 +488,16 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				return -1;
 			}
 
-			last_operation_error = response->error; // In case we need it later
+			if (response->error != 0)
+			{
+				last_operation_error = response->error;
+				if (throw_proper_error(response->error) == -1)
+				{
+					throw -OPENTMLIB_ERROR_VXI11_REMOTE;
+				}
+				return -1;
+			}
+
 		}
 		break;
 
@@ -460,7 +522,16 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				return -1;
 			}
 
-			last_operation_error = response->error; // In case we need it later
+			if (response->error != 0)
+			{
+				last_operation_error = response->error;
+				if (throw_proper_error(response->error) == -1)
+				{
+					throw -OPENTMLIB_ERROR_VXI11_LOCAL;
+				}
+				return -1;
+			}
+
 		}
 		break;
 
@@ -484,7 +555,16 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				return -1;
 			}
 
-			last_operation_error = response->error; // In case we need it later
+			if (response->error != 0)
+			{
+				last_operation_error = response->error;
+				if (throw_proper_error(response->error) == -1)
+				{
+					throw -OPENTMLIB_ERROR_VXI11_LOCK;
+				}
+				return -1;
+			}
+
 		}
 		break;
 
@@ -498,7 +578,16 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				return -1;
 			}
 
-			last_operation_error = response->error; // In case we need it later
+			if (response->error != 0)
+			{
+				last_operation_error = response->error;
+				if (throw_proper_error(response->error) == -1)
+				{
+					throw -OPENTMLIB_ERROR_VXI11_UNLOCK;
+				}
+				return -1;
+			}
+
 		}
 		break;
 
@@ -506,6 +595,61 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 		throw -OPENTMLIB_ERROR_BAD_OPERATION;
 		return -1;
 
+	}
+
+	return 0;
+
+}
+
+int vxi11_session::throw_proper_error(int error_code)
+{
+
+	switch (error_code)
+	{
+	case 1: // Syntax error
+		throw -OPENTMLIB_ERROR_VXI11_SYNTAX;
+		break;
+	case 3: // Device not accessible
+		throw -OPENTMLIB_ERROR_VXI11_DEVICE_NOT_ACCESSIBLE;
+		break;
+	case 4: // Invalid link identifier
+		throw -OPENTMLIB_ERROR_VXI11_INVALID_LINK_ID;
+		break;
+	case 5: // Parameter error
+		throw -OPENTMLIB_ERROR_VXI11_PARAMETER;
+		break;
+	case 6: // Channel not established
+		throw -OPENTMLIB_ERROR_VXI11_CHANNEL_NOT_ESTABLISHED;
+		break;
+	case 8: // Operation not supported
+		throw -OPENTMLIB_ERROR_OPERATION_UNSUPPORTED;
+		break;
+	case 9: // Out of resources
+		throw -OPENTMLIB_ERROR_VXI11_OUT_OF_RESOURCES;
+		break;
+	case 11: // Device locked by another link
+		throw -OPENTMLIB_ERROR_DEVICE_LOCKED;
+		break;
+	case 12: // No lock held
+		throw -OPENTMLIB_ERROR_NO_LOCK_HELD;
+		break;
+	case 15: // Timeout
+		throw -OPENTMLIB_ERROR_TIMEOUT;
+		break;
+	case 17: // I/O error
+		throw -OPENTMLIB_ERROR_IO_ISSUE;
+		break;
+	case 21: // invalid address
+		throw -OPENTMLIB_ERROR_VXI11_INVALID_ADDRESS;
+		break;
+	case 23: // Abort
+		throw -OPENTMLIB_ERROR_TRANSACTION_ABORTED;
+		break;
+	case 29: // Channel already established
+		throw -OPENTMLIB_ERROR_VXI11_CHANNEL_ESTABLISHED;
+		break;
+	default:
+		return -1;
 	}
 
 	return 0;

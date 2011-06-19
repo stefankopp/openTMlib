@@ -52,8 +52,14 @@ int serial_session::set_basic_options()
 
 }
 
-serial_session::serial_session(int port)
+serial_session::serial_session(int port, bool lock, unsigned int lock_timeout)
 {
+
+	if (lock == true)
+	{
+		throw -OPENTMLIB_ERROR_LOCKING_NOT_SUPPORTED;
+		return;
+	}
 
 	// Check port number given
 	if (port < 0)
@@ -88,6 +94,7 @@ serial_session::serial_session(int port)
 	term_char_enable = 1; // Termination character enabled
 	term_character = '\n';
 	write_index = 0;
+	eol_char = '\n';
 
 	return;
 
@@ -707,6 +714,15 @@ int serial_session::set_attribute(unsigned int attribute, unsigned int value)
 	switch (attribute)
 	{
 
+	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
+		if (value > 255)
+		{
+			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
+			return -1;
+		}
+		eol_char = value;
+		break;
+
 	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
 		timeout = value;
 		break;
@@ -768,6 +784,10 @@ int serial_session::get_attribute(unsigned int attribute, unsigned int *value)
 
 	switch (attribute)
 	{
+
+	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
+		*value = eol_char;
+		break;
 
 	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
 		*value = timeout;

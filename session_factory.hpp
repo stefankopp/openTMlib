@@ -24,6 +24,7 @@
 
 #include <string>
 #include "io_session.hpp"
+#include "configuration_store.hpp"
 
 using namespace std;
 
@@ -32,12 +33,14 @@ class session_factory
 
 public:
 	session_factory(); // Constructor
+	session_factory(string config_store); // Constructor
 	~session_factory(); // Destructor
-	io_session *open_session(string resource, int mode, unsigned int timeout); // Create session
+	io_session *open_session(string resource, bool mode, unsigned int timeout); // Create session
 	void close_session(io_session *session_ptr);
 
 private:
-	void uppercase(string & string_to_change);
+	string & uppercase(string & string_to_change);
+	configuration_store *store;
 
 protected:
 

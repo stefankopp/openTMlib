@@ -30,7 +30,7 @@ int io_session::write_string(string message, bool eol)
 	if (eol == true)
 	{
 		// Append EOL character
-		string message_with_eol = message + "\n";
+		string message_with_eol = message + eol_char;
 		return write_buffer((char *) message_with_eol.c_str(), message_with_eol.length());
 	}
 	else
@@ -170,5 +170,108 @@ int io_session::read_binblock(char *buffer, int max)
 	}
 
 	return done;
+
+}
+
+void io_session::trigger()
+{
+
+	io_operation(OPENTMLIB_OPERATION_TRIGGER, 0);
+	return;
+
+}
+
+void io_session::clear()
+{
+
+	io_operation(OPENTMLIB_OPERATION_CLEAR, 0);
+	return;
+
+}
+
+void io_session::remote()
+{
+
+	io_operation(OPENTMLIB_OPERATION_REMOTE, 0);
+	return;
+
+}
+
+void io_session::local()
+{
+
+	io_operation(OPENTMLIB_OPERATION_LOCAL, 0);
+	return;
+
+}
+
+void io_session::lock()
+{
+
+	io_operation(OPENTMLIB_OPERATION_LOCK, 0);
+	return;
+
+}
+
+void io_session::unlock()
+{
+
+	io_operation(OPENTMLIB_OPERATION_UNLOCK, 0);
+	return;
+
+}
+
+void io_session::abort()
+{
+
+	io_operation(OPENTMLIB_OPERATION_ABORT, 0);
+	return;
+
+}
+
+unsigned int io_session::read_stb()
+{
+
+	unsigned int value;
+
+	get_attribute(OPENTMLIB_ATTRIBUTE_STATUS_BYTE, &value);
+
+	return value;
+
+}
+
+void io_session::scpi_rst()
+{
+
+	write_string("*RST", true);
+
+}
+
+void io_session::scpi_cls()
+{
+
+	write_string("*CLS", true);
+
+}
+
+int io_session::scpi_check_errors(int max)
+{
+
+	string error_message;
+	error_message.resize(120);
+	int cycles = 0;
+
+	do
+	{
+		cycles++;
+		write_string("SYSTEM:ERROR?", true);
+		read_string(error_message);
+	}
+	while ((error_message != "+0,\"No error\"") && (cycles < max));
+
+	if (error_message != "+0,\"No error\"")
+		return -1;
+	else
+		return 0;
 
 }

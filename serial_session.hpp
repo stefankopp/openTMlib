@@ -34,7 +34,7 @@ class serial_session : public io_session
 {
 
 public:
-	serial_session(int port);
+	serial_session(int port, bool lock, unsigned int lock_timeout);
 	~serial_session();
 	int write_buffer(char *buffer, int count);
 	int read_buffer(char *buffer, int max);
@@ -60,9 +60,6 @@ private:
 private:
 	int file_descriptor;
 	struct termios old_settings;
-	unsigned int timeout; // Timeout (s)
-	int term_char_enable; // Termination character enable status (0 = off, 1 = on)
-	unsigned char term_character; // Termination character
 	char *session_buffer_ptr; // Pointer to local session buffer
 	int write_index; // Write index into local session buffer
 

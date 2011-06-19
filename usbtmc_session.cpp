@@ -33,10 +33,17 @@
 
 using namespace std;
 
-usbtmc_session::usbtmc_session(unsigned short int mfg_id, unsigned short int model, string serial_number)
+usbtmc_session::usbtmc_session(unsigned short int mfg_id, unsigned short int model, string serial_number,
+	bool lock, unsigned int lock_timeout)
 {
 
 	int ret;
+
+	if (lock == true)
+	{
+		throw -OPENTMLIB_ERROR_LOCKING_NOT_SUPPORTED;
+		return;
+	}
 
 	if ((usbtmc_ko_fd = open("/dev/usbtmc0", O_RDWR)) == -1)
 	{
@@ -59,7 +66,7 @@ usbtmc_session::usbtmc_session(unsigned short int mfg_id, unsigned short int mod
 		// Send control message to USBTMC driver
 		if ((ret = write(usbtmc_ko_fd, &control_msg, sizeof(struct usbtmc_io_control))) != sizeof(struct usbtmc_io_control))
 		{
-			if (ret == -USBTMC_MINOR_NUMBER_UNUSED)
+			if (ret == -OPENTMLIB_ERROR_USBTMC_MINOR_NUMBER_UNUSED)
 				goto try_next;
 			throw -OPENTMLIB_ERROR_USBTMC_WRITE;
 			goto close_usbtmc_ko;
@@ -96,6 +103,12 @@ usbtmc_session::usbtmc_session(unsigned short int mfg_id, unsigned short int mod
 			goto close_usbtmc_ko;
 		}
 
+		// Initialize member variables
+		timeout = 5; // 5 s
+		term_char_enable = 1; // Termination character enabled
+		term_character = '\n';
+		eol_char = '\n';
+
 		goto close_usbtmc_ko;
 
 try_next:
@@ -115,10 +128,17 @@ close_usbtmc_ko:
 
 }
 
-usbtmc_session::usbtmc_session(string manufacturer, string product, string serial_number)
+usbtmc_session::usbtmc_session(string manufacturer, string product, string serial_number, bool lock,
+	unsigned int lock_timeout)
 {
 
 	int ret;
+
+	if (lock == true)
+	{
+		throw -OPENTMLIB_ERROR_LOCKING_NOT_SUPPORTED;
+		return;
+	}
 
 	if ((usbtmc_ko_fd = open("/dev/usbtmc0", O_RDWR)) == -1)
 	{
@@ -141,7 +161,7 @@ usbtmc_session::usbtmc_session(string manufacturer, string product, string seria
 		// Send control message to USBTMC driver
 		if ((ret = write(usbtmc_ko_fd, &control_msg, sizeof(struct usbtmc_io_control))) != sizeof(struct usbtmc_io_control))
 		{
-			if (ret == -USBTMC_MINOR_NUMBER_UNUSED)
+			if (ret == -OPENTMLIB_ERROR_USBTMC_MINOR_NUMBER_UNUSED)
 				goto try_next;
 			throw -OPENTMLIB_ERROR_USBTMC_WRITE;
 			goto close_usbtmc_ko;
@@ -185,6 +205,12 @@ usbtmc_session::usbtmc_session(string manufacturer, string product, string seria
 			goto close_usbtmc_ko;
 		}
 
+		// Initialize member variables
+		timeout = 5; // 5 s
+		term_char_enable = 1; // Termination character enabled
+		term_character = '\n';
+		eol_char = '\n';
+
 		goto close_usbtmc_ko;
 
 try_next:
@@ -204,8 +230,14 @@ close_usbtmc_ko:
 
 }
 
-usbtmc_session::usbtmc_session(int minor)
+usbtmc_session::usbtmc_session(int minor, bool lock, unsigned int lock_timeout)
 {
+
+	if (lock == true)
+	{
+		throw -OPENTMLIB_ERROR_LOCKING_NOT_SUPPORTED;
+		return;
+	}
 
 	// Make sure minor number is in range
 	if ((minor == 0) || (minor > USBTMC_MAX_DEVICES))
@@ -220,7 +252,14 @@ usbtmc_session::usbtmc_session(int minor)
 	if ((device_fd = open(device_file, O_RDWR)) == -1)
 	{
 		throw -OPENTMLIB_ERROR_USBTMC_OPEN;
+		return;
 	}
+
+	// Initialize member variables
+	timeout = 5; // 5 s
+	term_char_enable = 1; // Termination character enabled
+	term_character = '\n';
+	eol_char = '\n';
 
 	return;
 
@@ -238,30 +277,56 @@ usbtmc_session::~usbtmc_session()
 int usbtmc_session::write_buffer(char *buffer, int count)
 {
 
-	int bytes_written;
+	int ret;
 
 	// Write buffer to special file
-	bytes_written = write(device_fd, buffer, count);
+	ret = write(device_fd, buffer, count);
 
-	if (bytes_written == -1)
-		throw errno;
+	if (ret < 0)
+	{
+		int save_errno = errno;
+		io_operation(OPENTMLIB_OPERATION_USBTMC_ABORT_WRITE, 0);
+		if (ret == -1)
+		{
+			// Driver returned a standard error number in errno
+			throw -save_errno;
+		}
+		else
+		{
+			// Driver returned a non-standard error number, errno is not set
+			throw ret;
+		}
+	}
 
-	return bytes_written;
+	return ret;
 
 }
 
 int usbtmc_session::read_buffer(char *buffer, int max)
 {
 
-	int bytes_read;
+	int ret;
 
 	// Read from special file
-	bytes_read = read(device_fd, buffer, max);
+	ret = read(device_fd, buffer, max);
 
-	if (bytes_read == -1)
-		throw errno;
+	if (ret < 0)
+	{
+		int save_errno = errno;
+		io_operation(OPENTMLIB_OPERATION_USBTMC_ABORT_READ, 0);
+		if (ret == -1)
+		{
+			// Driver returned a standard error number in errno
+			throw -save_errno;
+		}
+		else
+		{
+			// Driver returned a non-standard error number, errno is not set
+			throw ret;
+		}
+	}
 
-	return bytes_read;
+	return ret;
 
 }
 
@@ -269,28 +334,25 @@ int usbtmc_session::set_attribute(unsigned int attribute, unsigned int value)
 {
 
 	struct usbtmc_io_control control_msg;
-	unsigned int usbtmc_attribute;
+	int ret;
 
-	// Map OPENTMLIB attribute codes to USBTMC attribute codes
 	switch (attribute)
 	{
-	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
-		usbtmc_attribute = USBTMC_ATTRIBUTE_TIMEOUT;
-		break;
-	case OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE:
-		usbtmc_attribute = USBTMC_ATTRIBUTE_TERMCHAR_ENABLE;
-		break;
-	case OPENTMLIB_ATTRIBUTE_TERM_CHARACTER:
-		usbtmc_attribute = USBTMC_ATTRIBUTE_TERMCHAR;
-		break;
-	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE;
-		return -1;
+
+	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
+		if (value > 255)
+		{
+			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
+			return -1;
+		}
+		eol_char = value;
+		return 0;
+
 	}
 
 	control_msg.minor_number = minor_number;
 	control_msg.command = USBTMC_CONTROL_SET_ATTRIBUTE;
-	control_msg.argument = usbtmc_attribute;
+	control_msg.argument = attribute;
 	control_msg.value = value;
 
 	if ((usbtmc_ko_fd = open("/dev/usbtmc0", O_RDWR)) == -1)
@@ -300,15 +362,30 @@ int usbtmc_session::set_attribute(unsigned int attribute, unsigned int value)
 	}
 
 	// Send control message to USBTMC driver
-	if (write(usbtmc_ko_fd, &control_msg, sizeof(struct usbtmc_io_control)) != sizeof(struct usbtmc_io_control))
+	ret = write(usbtmc_ko_fd, &control_msg, sizeof(struct usbtmc_io_control));
+	if (ret < 0)
 	{
-		throw -OPENTMLIB_ERROR_USBTMC_WRITE;
-		return -1;
+		if (ret == -1)
+		{
+			// Driver returned a standard error number in errno
+			throw -errno;
+		}
+		else
+		{
+			// Driver returned a non-standard error number, errno is not set
+			throw ret;
+			ret = -1;
+		}
+		goto close_usbtmc_ko;
 	}
+
+	ret = 0;
+
+close_usbtmc_ko:
 
 	close(usbtmc_ko_fd);
 
-	return 0; // No error
+	return ret;
 
 }
 
@@ -317,43 +394,19 @@ int usbtmc_session::get_attribute(unsigned int attribute, unsigned int *value)
 
 	struct usbtmc_io_control control_msg;
 	int ret;
-	unsigned int usbtmc_attribute;
 
-	// Map OPENTMLIB attribute codes to USBTMC attribute codes
 	switch (attribute)
 	{
-	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
-		usbtmc_attribute = USBTMC_ATTRIBUTE_TIMEOUT;
-		break;
-	case OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE:
-		usbtmc_attribute = USBTMC_ATTRIBUTE_TERMCHAR_ENABLE;
-		break;
-	case OPENTMLIB_ATTRIBUTE_TERM_CHARACTER:
-		usbtmc_attribute = USBTMC_ATTRIBUTE_TERMCHAR;
-		break;
-	case OPENTMLIB_ATTRIBUTE_USBTMC_INTERFACE_CAPS:
-		usbtmc_attribute = USBTMC_ATTRIBUTE_INTERFACE_CAPABILITIES;
-		break;
-	case OPENTMLIB_ATTRIBUTE_USBTMC_DEVICE_CAPS:
-		usbtmc_attribute = USBTMC_ATTRIBUTE_DEVICE_CAPABILITIES;
-		break;
-	case OPENTMLIB_ATTRIBUTE_USBTMC_488_INTERFACE_CAPS:
-		usbtmc_attribute = USBTMC_ATTRIBUTE_USB488_INTERFACE_CAPABILITIES;
-		break;
-	case OPENTMLIB_ATTRIBUTE_USBTMC_488_DEVICE_CAPS:
-		usbtmc_attribute = USBTMC_ATRIBUTE_USB488_DEVICE_CAPABILITIES;
-		break;
-	case OPENTMLIB_ATTRIBUTE_STATUS_BYTE:
-		usbtmc_attribute = USBTMC_ATTRIBUTE_STATUS_BYTE;
-		break;
-	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE;
-		return -1;
+
+	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
+		*value = eol_char;
+		return 0;
+
 	}
 
 	control_msg.minor_number = minor_number;
 	control_msg.command = USBTMC_CONTROL_GET_ATTRIBUTE;
-	control_msg.argument = usbtmc_attribute;
+	control_msg.argument = attribute;
 
 	if ((usbtmc_ko_fd = open("/dev/usbtmc0", O_RDWR)) == -1)
 	{
@@ -362,18 +415,43 @@ int usbtmc_session::get_attribute(unsigned int attribute, unsigned int *value)
 	}
 
 	// Send control message to USBTMC driver
-	if (write(usbtmc_ko_fd, &control_msg, sizeof(struct usbtmc_io_control)) != sizeof(struct usbtmc_io_control))
+	ret = write(usbtmc_ko_fd, &control_msg, sizeof(struct usbtmc_io_control));
+	if (ret < 0)
 	{
-		throw -OPENTMLIB_ERROR_USBTMC_WRITE;
-		ret = -1;
+		if (ret == -1)
+		{
+			// Driver returned a standard error number in errno
+			throw -errno;
+		}
+		else
+		{
+			// Driver returned a non-standard error number, errno is not set
+			throw ret;
+			ret = -1;
+		}
 		goto close_usbtmc_ko;
 	}
 
-
 	// Read response from USBTMC driver
-	if (read(usbtmc_ko_fd, value, sizeof(unsigned int)) != sizeof(unsigned int))
+	ret = read(usbtmc_ko_fd, value, sizeof(unsigned int));
+	if (ret < 0)
 	{
-		throw -OPENTMLIB_ERROR_USBTMC_READ;
+		if (ret == -1)
+		{
+			// Driver returned a standard error number in errno
+			throw -errno;
+		}
+		else
+		{
+			// Driver returned a non-standard error number, errno is not set
+			throw ret;
+			ret = -1;
+		}
+		goto close_usbtmc_ko;
+	}
+	if (ret != sizeof(unsigned int))
+	{
+		throw -OPENTMLIB_ERROR_USBTMC_READ_LESS_THAN_EXPECTED;
 		ret = -1;
 		goto close_usbtmc_ko;
 	}
@@ -406,10 +484,20 @@ int usbtmc_session::io_operation(unsigned int operation, unsigned int value)
 	}
 
 	// Send control message to USBTMC driver
-	if (write(usbtmc_ko_fd, &control_msg, sizeof(struct usbtmc_io_control)) != sizeof(struct usbtmc_io_control))
+	ret = write(usbtmc_ko_fd, &control_msg, sizeof(struct usbtmc_io_control));
+	if (ret < 0)
 	{
-		throw -OPENTMLIB_ERROR_USBTMC_WRITE;
-		ret = -1;
+		if (ret == -1)
+		{
+			// Driver returned a standard error number in errno
+			throw -errno;
+		}
+		else
+		{
+			// Driver returned a non-standard error number, errno is not set
+			throw ret;
+			ret = -1;
+		}
 		goto close_usbtmc_ko;
 	}
 

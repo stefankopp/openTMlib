@@ -46,10 +46,27 @@ public:
 	int read_binblock(char *buffer, int max); // Read arbitrary length binblock
 	int write_int(int value, bool eol); // Write int value (as string)
 	int read_int(int &value); // Read int value (as string)
+	void trigger();
+	void clear();
+	void remote();
+	void local();
+	void lock();
+	void unlock();
+	void abort();
+	unsigned int read_stb();
+	void scpi_rst();
+	void scpi_cls();
+	int scpi_check_errors(int max);
 
 private:
 
 protected:
+	int term_char_enable; // Termination character enable status (0 = off, 1 = on)
+	unsigned char term_character; // Termination character
+	char eol_char; // End of line character (for write)
+	unsigned int timeout; // Timeout (s)
+	unsigned int wait_lock; // Wait for lock (1) or return immediately (0)
+	unsigned int set_end_indicator; // Set end indicator with last byte written
 
 };
 
