@@ -3,7 +3,7 @@
  * This file is part of an open-source test and measurement I/O library.
  * See documentation for details.
  *
- * Copyright (C) 2011, Stefan Kopp, Gechingen, Germany
+ * Copyright (C) 2011 Stefan Kopp
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,20 +26,24 @@
 #include <boost/tokenizer.hpp>
 #include <boost/lexical_cast.hpp>
 
+#define CONFIGURATION_STORE_MAX_SIZE		50 * 1024
+
 using namespace std;
 
 class configuration_store
 {
 
 public:
-	configuration_store(string store); // Constructor
+	configuration_store(string store = "/usr/local/etc/opentmlib.store"); // Constructor
 	~configuration_store(); // Destructor
-	void reload_store(); // Reload contents of configuration store
-	string lookup(string symbolic_name, vector<string> & keys_found, vector<string> & values_found); // Resolve symbolic name
+	void load(); // Load contents of configuration store file
+	void save(); // Save configuration to configuration store file
+	string lookup(string section, string option); // Find an option in a section and return its value
+	void update(string section, string option, string value); // Update or add an option in a section
+	void remove(string section, string option = ""); // Remove an option or a complete section
 
 private:
 	string store_file;
-	int file;
 	vector<string> keys;
 	vector<string> values;
 

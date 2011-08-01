@@ -3,7 +3,7 @@
  * This file is part of an open-source test and measurement I/O library.
  * See documentation for details.
  *
- * Copyright (C) 2011, Stefan Kopp, Gechingen, Germany
+ * Copyright (C) 2011 Stefan Kopp
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -35,27 +35,25 @@
 
 using namespace std;
 
-socket_session::socket_session(string address, unsigned short int port, bool lock, unsigned int lock_timeout)
+socket_session::socket_session(string address, unsigned short int port, bool lock,
+	unsigned int lock_timeout, io_monitor *monitor)
 {
 
 	if (lock == true)
 	{
-		throw -OPENTMLIB_ERROR_LOCKING_NOT_SUPPORTED;
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_LOCKING_NOT_SUPPORTED);
 	}
 
 	// Allocate memory for session buffer
 	if ((session_buffer_ptr = (char *) malloc(SOCKET_SESSION_LOCAL_BUFFER_SIZE)) == NULL)
 	{
-		throw -OPENTMLIB_ERROR_MEMORY_ALLOCATION;
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_MEMORY_ALLOCATION);
 	}
 
 	if ((instrument_socket = socket(PF_INET, SOCK_STREAM, 0)) == -1)
 	{
 		free(session_buffer_ptr);
-		throw -OPENTMLIB_ERROR_SOCKET_CREATE;
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_SOCKET_CREATE);
 	}
 
 	struct in_addr
@@ -84,8 +82,7 @@ socket_session::socket_session(string address, unsigned short int port, bool loc
 		sizeof(struct sockaddr_in)) == -1)
 	{
 		free(session_buffer_ptr);
-		throw -OPENTMLIB_ERROR_SOCKET_CONNECT;
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_SOCKET_CONNECT);
 	}
 
 	// Initialize member variables
@@ -94,6 +91,10 @@ socket_session::socket_session(string address, unsigned short int port, bool loc
 	term_character = '\n';
 	eol_char = '\n';
 	write_index = 0;
+	string_size = 200;
+	throw_on_scpi_error = 1;
+	tracing = 0;
+	this->monitor = monitor;
 
 	return;
 
@@ -105,7 +106,7 @@ socket_session::~socket_session()
 	// Close socket
 	if (close(instrument_socket) == -1)
 	{
-		throw -OPENTMLIB_ERROR_SOCKET_CLOSE;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_SOCKET_CLOSE);
 	}
 
 	// Free session buffer memory
@@ -140,17 +141,14 @@ int socket_session::write_buffer(char *buffer, int count)
 			// Wait for write to become possible
 			if (select(instrument_socket + 1, NULL, &writefdset, NULL, &timeout_s) != 1)
 			{
-				throw -OPENTMLIB_ERROR_TIMEOUT;
-				return -1;
-
+				throw_opentmlib_error(-OPENTMLIB_ERROR_TIMEOUT);
 			}
 		}
 
 		// Write buffer to socket
 		if ((bytes_written = send(instrument_socket, buffer, count, 0)) == -1)
 		{
-			throw errno;
-			return -1;
+			throw_opentmlib_error(-errno);
 		}
 
 		done += bytes_written;
@@ -187,16 +185,14 @@ int socket_session::read_buffer(char *buffer, int max)
 			// Wait for data to become possible
 			if (select(instrument_socket + 1, &readfdset, NULL, NULL, &timeout_s) != 1)
 			{
-				throw -OPENTMLIB_ERROR_TIMEOUT;
-				return -1;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_TIMEOUT);
 			}
 		}
 
 		// No need to buffer data locally, read directly to target buffer
 		if ((bytes_read = recv(instrument_socket, buffer, max, 0)) == -1)
 		{
-			throw errno;
-			return -1;
+			throw_opentmlib_error(-errno);
 		}
 
 		return bytes_read;
@@ -210,9 +206,7 @@ int socket_session::read_buffer(char *buffer, int max)
 		if (max > SOCKET_SESSION_LOCAL_BUFFER_SIZE)
 		{
 			// Potential buffer overflow
-			throw -OPENTMLIB_ERROR_SOCKET_REQUEST_TOO_MUCH;
-			return -1;
-
+			throw_opentmlib_error(-OPENTMLIB_ERROR_SOCKET_REQUEST_TOO_MUCH);
 		}
 
 		// Check if data in local buffer includes term character
@@ -240,16 +234,14 @@ int socket_session::read_buffer(char *buffer, int max)
 				// Wait for data to become possible
 				if (select(instrument_socket + 1, &readfdset, NULL, NULL, &timeout_s) != 1)
 				{
-					throw -OPENTMLIB_ERROR_TIMEOUT;
-					return -1;
+					throw_opentmlib_error(-OPENTMLIB_ERROR_TIMEOUT);
 				}
 			}
 
 			// Read data to local buffer
 			if ((bytes_read = recv(instrument_socket, session_buffer_ptr + done, max - done, 0)) == -1)
 			{
-				throw errno;
-				return -1;
+				throw_opentmlib_error(-errno);
 			}
 
 			// Check if data read includes term character
@@ -275,24 +267,46 @@ int socket_session::read_buffer(char *buffer, int max)
 		// Return what we have...
 		memcpy(buffer, session_buffer_ptr, max);
 		write_index = 0;
-		throw -OPENTMLIB_ERROR_BUFFER_OVERFLOW;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BUFFER_OVERFLOW);
 
 	}
 
 }
 
-int socket_session::set_attribute(unsigned int attribute, unsigned int value)
+void socket_session::set_attribute(unsigned int attribute, unsigned int value)
 {
+
+	// Check if attribute is known to parent class
+	try
+	{
+		base_set_attribute(attribute, value);
+		return;
+	}
+
+	catch (opentmlib_exception & e)
+	{
+		if (e.code != -OPENTMLIB_ERROR_BAD_ATTRIBUTE)
+		{
+			// Attribute was processed by parent class but an error was thrown. Pass up...
+			throw e;
+		}
+	}
 
 	switch (attribute)
 	{
 
+	case OPENTMLIB_ATTRIBUTE_TRACING:
+		if (value > 1)
+		{
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
+		}
+		tracing = value;
+		break;
+
 	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
 		if (value > 255)
 		{
-			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 		}
 		eol_char = value;
 		break;
@@ -304,8 +318,7 @@ int socket_session::set_attribute(unsigned int attribute, unsigned int value)
 	case OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE:
 		if (value > 1)
 		{
-			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 		}
 		term_char_enable = value;
 		break;
@@ -313,70 +326,79 @@ int socket_session::set_attribute(unsigned int attribute, unsigned int value)
 	case OPENTMLIB_ATTRIBUTE_TERM_CHARACTER:
 		if (value > 0xff)
 		{
-			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 		}
 		term_character = value;
 		break;
 
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE);
 
 	}
 
-	return 0; // No error
+	return; // No error
 
 }
 
-int socket_session::get_attribute(unsigned int attribute, unsigned int *value)
+unsigned int socket_session::get_attribute(unsigned int attribute)
 {
+
+	// Check if attribute is known to parent class
+	try
+	{
+		unsigned int value;
+		value = base_get_attribute(attribute);
+		return value;
+	}
+
+	catch (opentmlib_exception & e)
+	{
+		if (e.code != -OPENTMLIB_ERROR_BAD_ATTRIBUTE)
+		{
+			// Attribute was processed by parent class but an error was thrown. Pass up...
+			throw e;
+		}
+	}
 
 	switch (attribute)
 	{
 
+	case OPENTMLIB_ATTRIBUTE_TRACING:
+		return tracing;
+
 	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
-		*value = eol_char;
-		break;
+		return eol_char;
 
 	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
-		*value = timeout;
-		break;
+		return timeout;
 
 	case OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE:
-		*value = term_char_enable;
-		break;
+		return term_char_enable;
 
 	case OPENTMLIB_ATTRIBUTE_TERM_CHARACTER:
-		*value = term_character;
-		break;
+		return term_character;
 
 	case OPENTMLIB_ATTRIBUTE_SOCKET_BUFFER_SIZE:
-		*value = SOCKET_SESSION_LOCAL_BUFFER_SIZE;
-		break;
+		return SOCKET_SESSION_LOCAL_BUFFER_SIZE;
 
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE);
 
 	}
 
-	return 0; // No error
-
 }
 
-int socket_session::io_operation(unsigned int operation, unsigned int value)
+void socket_session::io_operation(unsigned int operation, unsigned int value)
 {
 
 	switch (operation)
 	{
 
 	default:
-		throw -OPENTMLIB_ERROR_BAD_OPERATION;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_OPERATION);
 
 	}
 
-	return 0;
+	return;
 
 }

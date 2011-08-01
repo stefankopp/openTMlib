@@ -3,7 +3,7 @@
  * This file is part of an open-source test and measurement I/O library.
  * See documentation for details.
  *
- * Copyright (C) 2011, Stefan Kopp, Gechingen, Germany
+ * Copyright (C) 2011 Stefan Kopp
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,19 +31,24 @@
 
 using namespace std;
 
-session_factory::session_factory()
-{
-
-	store = NULL;
-
-	return;
-
-}
-
 session_factory::session_factory(string config_store)
 {
 
-	store = new configuration_store(config_store);
+	store = NULL;
+	monitor = NULL;
+
+	if (config_store == "")
+	{
+		// Use default configuration store file
+		store = new configuration_store();
+	}
+	else
+	{
+		// Use configuration store file given
+		store = new configuration_store(config_store);
+	}
+
+	monitor = new io_monitor();
 
 	return;
 
@@ -55,6 +60,11 @@ session_factory::~session_factory()
 	if (store != NULL)
 	{
 		delete store;
+	}
+
+	if (monitor != NULL)
+	{
+		delete monitor;
 	}
 
 	return;
@@ -73,34 +83,30 @@ string & session_factory::uppercase(string & string_to_change)
 
 }
 
-io_session *session_factory::open_session(string resource, bool mode, unsigned int timeout)
+io_session *session_factory::open_session(string resource, bool lock, unsigned int timeout)
 {
 
+	string message;
 	io_session *session;
 	int n, board;
-	vector<string> keys_found;
-	vector<string> values_found;
+	string alias = "";
+	string name;
 
 	// Check if this is an alias
 	if (resource.find("::") == -1)
 	{
 		// No "::" found, check if string is in store
-		string temp = "";
-		try
-		{
-			temp = store->lookup(resource, keys_found, values_found);
-		}
-		catch (int e)
-		{
-			if (e != -OPENTMLIB_ERROR_CSTORE_BAD_ALIAS)
-			{
-				// Unexpected error... pass up
-				throw e;
-			}
-		}
+		string temp = store->lookup(resource, "address");
 		if (temp != "")
 		{
+			// Entry was found, use it
+			alias = resource;
 			resource = temp;
+			name = alias;
+		}
+		else
+		{
+			name = resource;
 		}
 	}
 
@@ -146,13 +152,11 @@ io_session *session_factory::open_session(string resource, bool mode, unsigned i
 			istringstream stream(pieces[0].substr(n + 4, pieces[0].length()));
 			if (!(stream >> board))
 			{
-				throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
-				return NULL;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 			}
 			if (board < 0)
 			{
-				throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
-				return NULL;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 			}
 		}
 		else
@@ -161,19 +165,13 @@ io_session *session_factory::open_session(string resource, bool mode, unsigned i
 		}
 		if ((pieces.size() == 1) || (pieces.size() > 1) && (uppercase(pieces[1]) == "INSTR"))
 		{
-			try
-			{
-				session = new serial_session(board, mode, 5);
-			}
-			catch (int e)
-			{
-				throw e;
-				return NULL;
-			}
+
+			session = new serial_session(board, lock, 5, monitor);
+			session->name = name;
 			goto session_created;
 		}
 		// Bad protocol field
-		throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 		return NULL;
 	}
 
@@ -186,13 +184,11 @@ io_session *session_factory::open_session(string resource, bool mode, unsigned i
 			istringstream stream(pieces[0].substr(n + 5, pieces[0].length()));
 			if (!(stream >> board))
 			{
-				throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
-				return NULL;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 			}
 			if (board < 0)
 			{
-				throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
-				return NULL;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 			}
 		}
 		else
@@ -215,16 +211,11 @@ io_session *session_factory::open_session(string resource, bool mode, unsigned i
 					device = "inst0";
 			}
 			if (pieces.size() == 4)
+			{
 				device = pieces[2];
-			try
-			{
-				session = new vxi11_session(pieces[1], device, mode, 5);
 			}
-			catch (int e)
-			{
-				throw e;
-				return NULL;
-			}
+			session = new vxi11_session(pieces[1], device, lock, 5, monitor);
+			session->name = name;
 			goto session_created;
 		}
 		if ((pieces.size() == 4) && (uppercase(pieces[3]) == "SOCKET"))
@@ -234,27 +225,18 @@ io_session *session_factory::open_session(string resource, bool mode, unsigned i
 			istringstream stream(pieces[2]);
 			if (!(stream >> port))
 			{
-				throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
-				return NULL;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 			}
 			if ((port < 0) || (port > 0xffff))
 			{
-				throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
-				return NULL;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 			}
-			try
-			{
-				session = new socket_session(pieces[1], port, mode, 5);
-			}
-			catch (int e)
-			{
-				throw e;
-				return NULL;
-			}
+			session = new socket_session(pieces[1], port, lock, 5, monitor);
+			session->name = name;
 			goto session_created;
 		}
 		// Bad protocol field
-		throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 		return NULL;
 	}
 
@@ -266,13 +248,11 @@ io_session *session_factory::open_session(string resource, bool mode, unsigned i
 			istringstream stream(pieces[0].substr(n + 3, pieces[0].length()));
 			if (!(stream >> board))
 			{
-				throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
-				return NULL;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 			}
 			if (board < 0)
 			{
-				throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
-				return NULL;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 			}
 		}
 		else
@@ -289,107 +269,143 @@ io_session *session_factory::open_session(string resource, bool mode, unsigned i
 			istringstream stream(pieces[4]);
 			if (!(stream >> interface))
 			{
-				throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
-				return NULL;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 			}
 		}
 		if ((pieces.size() == 6) && (pieces[5] != "INSTR"))
 		{
-			throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
-			return NULL;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 		}
-		try
-		{
-			session = new usbtmc_session(mfg_id, model, pieces[3], mode, 5);
-		}
-		catch (int e)
-		{
-			throw e;
-			return 0;
-		}
+		session = new usbtmc_session(mfg_id, model, pieces[3], lock, 5, monitor);
+		session->name = name;
 		goto session_created;
 	}
 
 	// Bad protocol field
-	throw -OPENTMLIB_ERROR_BAD_RESOURCE_STRING;
-	return NULL;
+	throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_RESOURCE_STRING);
 
 session_created:
 
 	if (session != NULL)
 	{
-		// Set default settings
-		session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE, 1);
-		session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHARACTER, 10);
-		session->set_attribute(OPENTMLIB_ATTRIBUTE_EOL_CHAR, 10);
-		session->set_attribute(OPENTMLIB_ATTRIBUTE_TIMEOUT, 5);
 
-		// Apply settings found in configuration store
+		// Apply session settings (from configuration store or defaults)
+		string temp;
 
-		for (int k = 0; k < keys_found.size(); k++)
+		temp = store->lookup(alias, "term_char");
+		if (temp != "")
 		{
-			uppercase(keys_found[k]);
-			uppercase(values_found[k]);
-
-			if (keys_found[k] == "TERM_CHAR")
+			int term_char;
+			istringstream stream(temp);
+			if (!(stream >> term_char))
 			{
-				int term_char;
-				istringstream stream(values_found[k]);
-				if (!(stream >> term_char))
-				{
-					throw -OPENTMLIB_ERROR_CSTORE_BAD_VALUE;
-					return NULL;
-				}
-				session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHARACTER, term_char);
+				throw_opentmlib_error(-OPENTMLIB_ERROR_CSTORE_BAD_VALUE);
 			}
-
-			if (keys_found[k] == "TERM_CHAR_ENABLE")
-			{
-				if ((values_found[k] != "ON") && (values_found[k] != "OFF"))
-				{
-					throw -OPENTMLIB_ERROR_CSTORE_BAD_VALUE;
-					return NULL;
-				}
-				if (values_found[k] == "ON")
-				{
-					session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE, 1);
-				}
-				if (values_found[k] == "OFF")
-				{
-					session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE, 0);
-				}
-			}
-
-			if (keys_found[k] == "EOL_CHAR")
-			{
-				int c;
-				istringstream stream(values_found[k]);
-				if (!(stream >> c))
-				{
-					throw -OPENTMLIB_ERROR_CSTORE_BAD_VALUE;
-					return NULL;
-				}
-				if ((c < 0) || (c > 255))
-				{
-					throw -OPENTMLIB_ERROR_CSTORE_BAD_VALUE;
-					return NULL;
-				}
-				session->set_attribute(OPENTMLIB_ATTRIBUTE_EOL_CHAR, c);
-			}
-
-			if (keys_found[k] == "TIMEOUT")
-			{
-				int seconds;
-				istringstream stream(values_found[k]);
-				if (!(stream >> seconds))
-				{
-					throw -OPENTMLIB_ERROR_CSTORE_BAD_VALUE;
-					return NULL;
-				}
-				session->set_attribute(OPENTMLIB_ATTRIBUTE_TIMEOUT, seconds);
-			}
-
+			session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHARACTER, term_char);
 		}
+		else
+		{
+			session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHARACTER, '\n');
+		}
+
+		temp = store->lookup(alias, "term_char_enable");
+		if (temp != "")
+		{
+			uppercase(temp);
+			if ((temp != "ON") && (temp != "OFF"))
+			{
+				throw_opentmlib_error(-OPENTMLIB_ERROR_CSTORE_BAD_VALUE);
+			}
+			if (temp == "ON")
+			{
+				session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE, 1);
+			}
+			else
+			{
+				session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE, 0);
+			}
+		}
+		else
+		{
+			session->set_attribute(OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE, 1);
+		}
+
+		temp = store->lookup(alias, "eol_char");
+		if (temp != "")
+		{
+			int c;
+			istringstream stream(temp);
+			if (!(stream >> c))
+			{
+				throw_opentmlib_error(-OPENTMLIB_ERROR_CSTORE_BAD_VALUE);
+			}
+			if ((c < 0) || (c > 255))
+			{
+				throw_opentmlib_error(-OPENTMLIB_ERROR_CSTORE_BAD_VALUE);
+			}
+			session->set_attribute(OPENTMLIB_ATTRIBUTE_EOL_CHAR, c);
+		}
+		else
+		{
+			session->set_attribute(OPENTMLIB_ATTRIBUTE_EOL_CHAR, 10);
+		}
+
+		temp = store->lookup(alias, "timeout");
+		if (temp != "")
+		{
+			int seconds;
+			istringstream stream(temp);
+			if (!(stream >> seconds))
+			{
+				throw_opentmlib_error(-OPENTMLIB_ERROR_CSTORE_BAD_VALUE);
+			}
+			session->set_attribute(OPENTMLIB_ATTRIBUTE_TIMEOUT, seconds);
+		}
+		else
+		{
+			session->set_attribute(OPENTMLIB_ATTRIBUTE_TIMEOUT, 5);
+		}
+
+		temp = store->lookup(alias, "tracing");
+		if (temp != "")
+		{
+			uppercase(temp);
+			if ((temp != "ON") && (temp != "OFF"))
+			{
+				throw_opentmlib_error(-OPENTMLIB_ERROR_CSTORE_BAD_VALUE);
+			}
+			if (temp == "ON")
+			{
+				session->set_attribute(OPENTMLIB_ATTRIBUTE_TRACING, 1);
+			}
+			else
+			{
+				session->set_attribute(OPENTMLIB_ATTRIBUTE_TRACING, 0);
+			}
+		}
+		else
+		{
+			session->set_attribute(OPENTMLIB_ATTRIBUTE_TRACING, 0);
+		}
+
+		temp = store->lookup(alias, "set_end_indicator");
+		if (temp != "")
+		{
+			uppercase(temp);
+			if ((temp != "ON") && (temp != "OFF"))
+			{
+				throw_opentmlib_error(-OPENTMLIB_ERROR_CSTORE_BAD_VALUE);
+			}
+			if (temp == "ON")
+			{
+				session->set_attribute(OPENTMLIB_ATTRIBUTE_SET_END_INDICATOR, 1);
+			}
+			else
+			{
+				session->set_attribute(OPENTMLIB_ATTRIBUTE_SET_END_INDICATOR, 0);
+			}
+		}
+
 	}
 
 	return session;
@@ -408,4 +424,7 @@ void session_factory::close_session(io_session *session_ptr)
 
 }
 
-
+configuration_store *session_factory::get_store()
+{
+	return store;
+}

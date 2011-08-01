@@ -3,7 +3,7 @@
  * This file is part of an open-source test and measurement I/O library.
  * See documentation for details.
  *
- * Copyright (C) 2011, Stefan Kopp, Gechingen, Germany
+ * Copyright (C) 2011 Stefan Kopp
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -52,27 +52,24 @@ int serial_session::set_basic_options()
 
 }
 
-serial_session::serial_session(int port, bool lock, unsigned int lock_timeout)
+serial_session::serial_session(int port, bool lock, unsigned int lock_timeout, io_monitor *monitor)
 {
 
 	if (lock == true)
 	{
-		throw -OPENTMLIB_ERROR_LOCKING_NOT_SUPPORTED;
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_LOCKING_NOT_SUPPORTED);
 	}
 
 	// Check port number given
 	if (port < 0)
 	{
-		throw -OPENTMLIB_ERROR_SERIAL_BAD_PORT;
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_SERIAL_BAD_PORT);
 	}
 
 	// Allocate memory for session buffer
 	if ((session_buffer_ptr = (char *) malloc(SERIAL_SESSION_LOCAL_BUFFER_SIZE)) == NULL)
 	{
-		throw -OPENTMLIB_ERROR_MEMORY_ALLOCATION;
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_MEMORY_ALLOCATION);
 	}
 
 	// Open COM port
@@ -81,8 +78,7 @@ serial_session::serial_session(int port, bool lock, unsigned int lock_timeout)
 	if ((file_descriptor = open(device_file, O_RDWR | O_NOCTTY | O_NDELAY)) == -1)
 	{
 		free(session_buffer_ptr);
-		throw -OPENTMLIB_ERROR_SERIAL_OPEN;
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_SERIAL_OPEN);
 	}
 
 	// Save current settings, then set basic opions
@@ -95,6 +91,10 @@ serial_session::serial_session(int port, bool lock, unsigned int lock_timeout)
 	term_character = '\n';
 	write_index = 0;
 	eol_char = '\n';
+	string_size = 200;
+	throw_on_scpi_error = 1;
+	tracing = 0;
+	this->monitor = monitor;
 
 	return;
 
@@ -109,7 +109,7 @@ serial_session::~serial_session()
 	// Close COM port
 	if (close(file_descriptor) == -1)
 	{
-		throw -OPENTMLIB_ERROR_SERIAL_CLOSE;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_SERIAL_CLOSE);
 	}
 
 	// Free session buffer memory
@@ -144,17 +144,14 @@ int serial_session::write_buffer(char *buffer, int count)
 			// Wait for write to become possible
 			if (select(file_descriptor + 1, NULL, &writefdset, NULL, &timeout_s) != 1)
 			{
-				throw -OPENTMLIB_ERROR_TIMEOUT;
-				return -1;
-
+				throw_opentmlib_error(-OPENTMLIB_ERROR_TIMEOUT);
 			}
 		}
 
 		// Write buffer to socket
 		if ((bytes_written = send(file_descriptor, buffer, count, 0)) == -1)
 		{
-			throw errno;
-			return -1;
+			throw_opentmlib_error(-errno);
 		}
 
 		done += bytes_written;
@@ -191,16 +188,14 @@ int serial_session::read_buffer(char *buffer, int max)
 			// Wait for data to become possible
 			if (select(file_descriptor + 1, &readfdset, NULL, NULL, &timeout_s) != 1)
 			{
-				throw -OPENTMLIB_ERROR_TIMEOUT;
-				return -1;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_TIMEOUT);
 			}
 		}
 
 		// No need to buffer data locally, read directly to target buffer
 		if ((bytes_read = read(file_descriptor, buffer, max)) == -1)
 		{
-			throw errno;
-			return -1;
+			throw_opentmlib_error(-errno);
 		}
 
 		return bytes_read;
@@ -214,8 +209,7 @@ int serial_session::read_buffer(char *buffer, int max)
 		if (max > SERIAL_SESSION_LOCAL_BUFFER_SIZE)
 		{
 			// Potential buffer overflow
-			throw -OPENTMLIB_ERROR_SERIAL_REQUEST_TOO_MUCH;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_SERIAL_REQUEST_TOO_MUCH);
 		}
 
 		// Check if data in local buffer includes term character
@@ -243,16 +237,14 @@ int serial_session::read_buffer(char *buffer, int max)
 				// Wait for data to become possible
 				if (select(file_descriptor + 1, &readfdset, NULL, NULL, &timeout_s) != 1)
 				{
-					throw -OPENTMLIB_ERROR_TIMEOUT;
-					return -1;
+					throw_opentmlib_error(-OPENTMLIB_ERROR_TIMEOUT);
 				}
 			}
 
 			// Read data to local buffer
 			if ((bytes_read = read(file_descriptor, session_buffer_ptr + done, max - done)) == -1)
 			{
-				throw errno;
-				return -1;
+				throw_opentmlib_error(-errno);
 			}
 
 			// Check if data read includes term character
@@ -278,14 +270,13 @@ int serial_session::read_buffer(char *buffer, int max)
 		// Return what we have...
 		memcpy(buffer, session_buffer_ptr, max);
 		write_index = 0;
-		throw -OPENTMLIB_ERROR_BUFFER_OVERFLOW;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BUFFER_OVERFLOW);
 
 	}
 
 }
 
-int serial_session::set_attribute_baudrate(unsigned int value)
+void serial_session::set_attribute_baudrate(unsigned int value)
 {
 
 	struct termios settings;
@@ -364,17 +355,16 @@ int serial_session::set_attribute_baudrate(unsigned int value)
 		cfsetospeed(&settings, B115200);
 		break;
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 	}
 
 	tcsetattr(file_descriptor, TCSANOW, &settings); // Activate new settings (immediately)
 
-	return 0;
+	return;
 
 }
 
-int serial_session::get_attribute_baudrate(unsigned int *value)
+unsigned int serial_session::get_attribute_baudrate()
 {
 
 	struct termios settings;
@@ -387,66 +377,46 @@ int serial_session::get_attribute_baudrate(unsigned int *value)
 	switch(settings.c_cflag)
 	{
 	case B50:
-		*value = 50;
-		break;
+		return 50;
 	case B75:
-		*value = 75;
-		break;
+		return 75;
 	case B110:
-		*value = 110;
-		break;
+		return 110;
 	case B134:
-		*value = 134;
-		break;
+		return 134;
 	case B150:
-		*value = 150;
-		break;
+		return 150;
 	case B200:
-		*value = 200;
-		break;
+		return 200;
 	case B300:
-		*value = 300;
-		break;
+		return 300;
 	case B600:
-		*value = 600;
-		break;
+		return 600;
 	case B1200:
-		*value = 1200;
-		break;
+		return 1200;
 	case B1800:
-		*value = 1800;
-		break;
+		return 1800;
 	case B2400:
-		*value = 2400;
-		break;
+		return 2400;
 	case B4800:
-		*value = 4800;
-		break;
+		return 4800;
 	case B9600:
-		*value = 9600;
-		break;
+		return 9600;
 	case B19200:
-		*value = 19200;
-		break;
+		return 19200;
 	case B38400:
-		*value = 38400;
-		break;
+		return 38400;
 	case B57600:
-		*value = 57600;
-		break;
+		return 57600;
 	case B115200:
-		*value = 115200;
-		break;
+		return 115200;
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 	}
-
-	return 0;
 
 }
 
-int serial_session::set_attribute_size(unsigned int value)
+void serial_session::set_attribute_size(unsigned int value)
 {
 
 	struct termios settings;
@@ -473,17 +443,16 @@ int serial_session::set_attribute_size(unsigned int value)
 		settings.c_cflag |= CS8;
 		break;
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 	}
 
 	tcsetattr(file_descriptor, TCSANOW, &settings); // Activate new settings (immediately)
 
-	return 0;
+	return;
 
 }
 
-int serial_session::get_attribute_size(unsigned int *value)
+unsigned int serial_session::get_attribute_size()
 {
 
 	struct termios settings;
@@ -495,27 +464,20 @@ int serial_session::get_attribute_size(unsigned int *value)
 	switch(settings.c_cflag)
 	{
 	case CS5:
-		*value = 5;
-		break;
+		return 5;
 	case CS6:
-		*value = 6;
-		break;
+		return 6;
 	case CS7:
-		*value = 7;
-		break;
+		return 7;
 	case CS8:
-		*value = 8;
-		break;
+		return 8;
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 	}
-
-	return 0;
 
 }
 
-int serial_session::set_attribute_parity(unsigned int value)
+void serial_session::set_attribute_parity(unsigned int value)
 {
 
 	struct termios settings;
@@ -540,17 +502,16 @@ int serial_session::set_attribute_parity(unsigned int value)
 		settings.c_iflag |= INPCK | ISTRIP;
 		break;
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 	}
 
 	tcsetattr(file_descriptor, TCSANOW, &settings); // Activate new settings (immediately)
 
-	return 0;
+	return;
 
 }
 
-int serial_session::get_attribute_parity(unsigned int *value)
+unsigned int serial_session::get_attribute_parity()
 {
 
 	struct termios settings;
@@ -559,21 +520,17 @@ int serial_session::get_attribute_parity(unsigned int *value)
 
 	if (!(settings.c_cflag & PARENB))
 	{
-		*value = OPENTMLIB_SERIAL_PARITY_NONE;
-		return 0;
+		return OPENTMLIB_SERIAL_PARITY_NONE;
 	}
 	if (settings.c_cflag & PARODD)
 	{
-		*value = OPENTMLIB_SERIAL_PARITY_ODD;
-		return 0;
+		return OPENTMLIB_SERIAL_PARITY_ODD;
 	}
-	*value = OPENTMLIB_SERIAL_PARITY_EVEN;
-
-	return 0;
+	return OPENTMLIB_SERIAL_PARITY_EVEN;
 
 }
 
-int serial_session::set_attribute_stopbits(unsigned int value)
+void serial_session::set_attribute_stopbits(unsigned int value)
 {
 
 	struct termios settings;
@@ -590,17 +547,16 @@ int serial_session::set_attribute_stopbits(unsigned int value)
 		settings.c_cflag |= CSTOPB;
 		break;
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 	}
 
 	tcsetattr(file_descriptor, TCSANOW, &settings); // Activate new settings (immediately)
 
-	return 0;
+	return;
 
 }
 
-int serial_session::get_attribute_stopbits(unsigned int *value)
+unsigned int serial_session::get_attribute_stopbits()
 {
 
 	struct termios settings;
@@ -609,16 +565,13 @@ int serial_session::get_attribute_stopbits(unsigned int *value)
 
 	if (settings.c_cflag & CSTOPB)
 	{
-		*value = 2;
-		return 0;
+		return 2;
 	}
-	*value = 1;
-
-	return 0;
+	return 1;
 
 }
 
-int serial_session::set_attribute_rtscts(unsigned int value)
+void serial_session::set_attribute_rtscts(unsigned int value)
 {
 
 	struct termios settings;
@@ -635,17 +588,16 @@ int serial_session::set_attribute_rtscts(unsigned int value)
 		settings.c_cflag |= CRTSCTS;
 		break;
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 	}
 
 	tcsetattr(file_descriptor, TCSANOW, &settings); // Activate new settings (immediately)
 
-	return 0;
+	return;
 
 }
 
-int serial_session::get_attribute_rtscts(unsigned int *value)
+unsigned int serial_session::get_attribute_rtscts()
 {
 
 	struct termios settings;
@@ -654,23 +606,20 @@ int serial_session::get_attribute_rtscts(unsigned int *value)
 
 	if (settings.c_cflag & CRTSCTS)
 	{
-		*value = 1;
-		return 0;
+		return 1;
 	}
-	*value = 0;
-
 	return 0;
 
 }
 
-int serial_session::set_attribute_xonxoff(unsigned int value)
+void serial_session::set_attribute_xonxoff(unsigned int value)
 {
 
 	struct termios settings;
 
 	tcgetattr(file_descriptor, &settings); // Get actual settings
 
-	// Set hardware flow control status
+	// Set software flow control status
 	switch(value)
 	{
 	case 0:
@@ -680,17 +629,16 @@ int serial_session::set_attribute_xonxoff(unsigned int value)
 		settings.c_iflag |= IXON | IXOFF | IXANY;
 		break;
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 	}
 
 	tcsetattr(file_descriptor, TCSANOW, &settings); // Activate new settings (immediately)
 
-	return 0;
+	return;
 
 }
 
-int serial_session::get_attribute_xonxoff(unsigned int *value)
+unsigned int serial_session::get_attribute_xonxoff()
 {
 
 	struct termios settings;
@@ -699,26 +647,46 @@ int serial_session::get_attribute_xonxoff(unsigned int *value)
 
 	if ((settings.c_iflag & IXON) && (settings.c_iflag & IXOFF) && (settings.c_iflag & IXANY))
 	{
-		*value = 1;
-		return 0;
+		return 1;
 	}
-	*value = 0;
-
 	return 0;
 
 }
 
-int serial_session::set_attribute(unsigned int attribute, unsigned int value)
+void serial_session::set_attribute(unsigned int attribute, unsigned int value)
 {
+
+	// Check if attribute is known to parent class
+	try
+	{
+		base_set_attribute(attribute, value);
+		return;
+	}
+
+	catch (opentmlib_exception & e)
+	{
+		if (e.code != -OPENTMLIB_ERROR_BAD_ATTRIBUTE)
+		{
+			// Attribute was processed by parent class but an error was thrown. Pass up...
+			throw e;
+		}
+	}
 
 	switch (attribute)
 	{
 
+	case OPENTMLIB_ATTRIBUTE_TRACING:
+		if (value > 1)
+		{
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
+		}
+		tracing = value;
+		break;
+
 	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
 		if (value > 255)
 		{
-			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 		}
 		eol_char = value;
 		break;
@@ -730,8 +698,7 @@ int serial_session::set_attribute(unsigned int attribute, unsigned int value)
 	case OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE:
 		if (value > 1)
 		{
-			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 		}
 		term_char_enable = value;
 		break;
@@ -739,118 +706,121 @@ int serial_session::set_attribute(unsigned int attribute, unsigned int value)
 	case OPENTMLIB_ATTRIBUTE_TERM_CHARACTER:
 		if (value > 0xff)
 		{
-			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 		}
 		term_character = value;
 		break;
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_BAUDRATE:
-		return set_attribute_baudrate(value);
+		set_attribute_baudrate(value);
 		break;
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_SIZE:
-		return set_attribute_size(value);
+		set_attribute_size(value);
 		break;
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_PARITY:
-		return set_attribute_parity(value);
+		set_attribute_parity(value);
 		break;
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_STOPBITS:
-		return set_attribute_stopbits(value);
+		set_attribute_stopbits(value);
 		break;
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_RTSCTS:
-		return set_attribute_rtscts(value);
+		set_attribute_rtscts(value);
 		break;
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_XONXOFF:
-		return set_attribute_xonxoff(value);
+		set_attribute_xonxoff(value);
 		break;
 
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE);
 
 	}
 
-	return 0; // No error
+	return;
 
 }
 
-int serial_session::get_attribute(unsigned int attribute, unsigned int *value)
+unsigned int serial_session::get_attribute(unsigned int attribute)
 {
+
+	// Check if attribute is known to parent class
+	try
+	{
+		unsigned int value;
+		value = base_get_attribute(attribute);
+		return value;
+	}
+
+	catch (opentmlib_exception & e)
+	{
+		if (e.code != -OPENTMLIB_ERROR_BAD_ATTRIBUTE)
+		{
+			// Attribute was processed by parent class but an error was thrown. Pass up...
+			throw e;
+		}
+	}
 
 	switch (attribute)
 	{
 
+	case OPENTMLIB_ATTRIBUTE_TRACING:
+		return tracing;
+
 	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
-		*value = eol_char;
-		break;
+		return eol_char;
 
 	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
-		*value = timeout;
-		break;
+		return timeout;
 
 	case OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE:
-		*value = term_char_enable;
-		break;
+		return term_char_enable;
 
 	case OPENTMLIB_ATTRIBUTE_TERM_CHARACTER:
-		*value = term_character;
-		break;
+		return term_character;
 
 	case OPENTMLIB_ATTRIBUTE_SOCKET_BUFFER_SIZE:
-		*value = SERIAL_SESSION_LOCAL_BUFFER_SIZE;
-		break;
+		return SERIAL_SESSION_LOCAL_BUFFER_SIZE;
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_BAUDRATE:
-		return get_attribute_baudrate(value);
-		break;
+		return get_attribute_baudrate();
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_SIZE:
-		return get_attribute_size(value);
-		break;
+		return get_attribute_size();
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_PARITY:
-		return get_attribute_parity(value);
-		break;
+		return get_attribute_parity();
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_STOPBITS:
-		return get_attribute_stopbits(value);
-		break;
+		return get_attribute_stopbits();
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_RTSCTS:
-		return get_attribute_rtscts(value);
-		break;
+		return get_attribute_rtscts();
 
 	case OPENTMLIB_ATTRIBUTE_SERIAL_XONXOFF:
-		return get_attribute_xonxoff(value);
-		break;
+		return get_attribute_xonxoff();
 
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE);
 
 	}
 
-	return 0; // No error
-
 }
 
-int serial_session::io_operation(unsigned int operation, unsigned int value)
+void serial_session::io_operation(unsigned int operation, unsigned int value)
 {
 
 	switch (operation)
 	{
 
 	default:
-		throw -OPENTMLIB_ERROR_BAD_OPERATION;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_OPERATION);
 
 	}
 
-	return 0;
+	return;
 
 }

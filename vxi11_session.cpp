@@ -3,7 +3,7 @@
  * This file is part of an open-source test and measurement I/O library.
  * See documentation for details.
  *
- * Copyright (C) 2011, Stefan Kopp, Gechingen, Germany
+ * Copyright (C) 2011 Stefan Kopp
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -35,7 +35,8 @@
 
 using namespace std;
 
-vxi11_session::vxi11_session(string address, string logical_name, bool lock, unsigned int lock_timeout)
+vxi11_session::vxi11_session(string address, string logical_name, bool lock, unsigned int lock_timeout,
+	io_monitor* monitor)
 {
 
 	Create_LinkParms create_link_parms;
@@ -44,8 +45,7 @@ vxi11_session::vxi11_session(string address, string logical_name, bool lock, uns
 	// Initialize connection to VXI-11 RPC server in the instrument
 	if ((vxi11_link = clnt_create(address.c_str(), DEVICE_CORE, DEVICE_CORE_VERSION, "tcp")) == NULL)
 	{
-		throw -OPENTMLIB_ERROR_VXI11_CONNECTION;
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_CONNECTION);
 	}
 
 	// Initialize VXI-11 link to logical device
@@ -55,21 +55,20 @@ vxi11_session::vxi11_session(string address, string logical_name, bool lock, uns
 	create_link_parms.device = (char *) logical_name.c_str();
 	if ((create_link_response = create_link_1(&create_link_parms, vxi11_link)) == NULL)
 	{
-		throw -OPENTMLIB_ERROR_VXI11_RPC;
 		clnt_destroy(vxi11_link);
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 	}
 
 	if (create_link_response->error != 0)
+	{
+		clnt_destroy(vxi11_link);
+		last_operation_error = create_link_response->error;
+		if (throw_proper_error(create_link_response->error) == -1)
 		{
-			last_operation_error = create_link_response->error;
-			if (throw_proper_error(create_link_response->error) == -1)
-			{
-				throw -OPENTMLIB_ERROR_VXI11_LINK;
-			}
-			clnt_destroy(vxi11_link);
-			return;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_LINK);
 		}
+		return;
+	}
 
 	// Store link ID, abort port etc. for later
 	device_link = create_link_response->lid;
@@ -86,9 +85,8 @@ vxi11_session::vxi11_session(string address, string logical_name, bool lock, uns
 	if ((vxi11_abort_link = clnttcp_create(&abort_address, DEVICE_ASYNC, DEVICE_ASYNC_VERSION,
 		&abort_socket, 0, 0)) == NULL)
 	{
-		throw -OPENTMLIB_ERROR_VXI11_ABORT_CONNECTION;
 		clnt_destroy(vxi11_link);
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_ABORT_CONNECTION);
 	}
 
 	// Initialize member variables
@@ -96,6 +94,10 @@ vxi11_session::vxi11_session(string address, string logical_name, bool lock, uns
 	term_char_enable = 1; // Termination character enabled
 	term_character = '\n';
 	eol_char = '\n';
+	string_size = 200;
+	throw_on_scpi_error = 1;
+	tracing = 0;
+	this->monitor = monitor;
 
 	return;
 
@@ -107,8 +109,7 @@ vxi11_session::~vxi11_session()
 	// Tear down link to logical device
 	if (destroy_link_1(&device_link, vxi11_link) == NULL)
 	{
-		throw -OPENTMLIB_ERROR_VXI11_RPC;
-		return;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 	}
 
 	// Close connection to RPC servers
@@ -154,8 +155,7 @@ int vxi11_session::write_buffer(char *buffer, int count)
 		write_parms.data.data_len = this_chunk; // Number of characters to send
 		if ((write_response = device_write_1(&write_parms, vxi11_link)) == NULL)
 		{
-			throw -OPENTMLIB_ERROR_VXI11_RPC;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 		}
 
 		if (write_response->error != 0)
@@ -163,7 +163,7 @@ int vxi11_session::write_buffer(char *buffer, int count)
 			last_operation_error = write_response->error;
 			if (throw_proper_error(write_response->error) == -1)
 			{
-				throw -OPENTMLIB_ERROR_VXI11_WRITE;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_WRITE);
 			}
 			return -1;
 		}
@@ -200,8 +200,7 @@ int vxi11_session::read_buffer(char *buffer, int max)
 	read_parms.termChar = term_character; // Term character
 	if ((read_response = device_read_1(&read_parms, vxi11_link)) == NULL)
 	{
-		throw -OPENTMLIB_ERROR_VXI11_RPC;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 	}
 
 	if (read_response->error != 0)
@@ -209,7 +208,7 @@ int vxi11_session::read_buffer(char *buffer, int max)
 		last_operation_error = read_response->error;
 		if (throw_proper_error(read_response->error) == -1)
 		{
-			throw -OPENTMLIB_ERROR_VXI11_READ;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_READ);
 		}
 		return -1;
 	}
@@ -221,17 +220,40 @@ int vxi11_session::read_buffer(char *buffer, int max)
 
 }
 
-int vxi11_session::set_attribute(unsigned int attribute, unsigned int value)
+void vxi11_session::set_attribute(unsigned int attribute, unsigned int value)
 {
+
+	// Check if attribute is known to parent class
+	try
+	{
+		base_set_attribute(attribute, value);
+		return;
+	}
+
+	catch (opentmlib_exception & e)
+	{
+		if (e.code != -OPENTMLIB_ERROR_BAD_ATTRIBUTE)
+		{
+			// Attribute was processed by parent class but an error was thrown. Pass up...
+			throw e;
+		}
+	}
 
 	switch (attribute)
 	{
 
+	case OPENTMLIB_ATTRIBUTE_TRACING:
+		if (value > 1)
+		{
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
+		}
+		tracing = value;
+		break;
+
 	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
 		if (value > 255)
 		{
-			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 		}
 		eol_char = value;
 		break;
@@ -243,8 +265,7 @@ int vxi11_session::set_attribute(unsigned int attribute, unsigned int value)
 	case OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE:
 		if (value > 1)
 		{
-			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 		}
 		term_char_enable = value;
 		break;
@@ -252,8 +273,7 @@ int vxi11_session::set_attribute(unsigned int attribute, unsigned int value)
 	case OPENTMLIB_ATTRIBUTE_TERM_CHARACTER:
 		if (value > 0xff)
 		{
-			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 		}
 		term_character = value;
 		break;
@@ -261,8 +281,7 @@ int vxi11_session::set_attribute(unsigned int attribute, unsigned int value)
 	case OPENTMLIB_ATTRIBUTE_WAIT_LOCK:
 		if (value > 1)
 		{
-			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 		}
 		wait_lock = value;
 		break;
@@ -270,43 +289,57 @@ int vxi11_session::set_attribute(unsigned int attribute, unsigned int value)
 	case OPENTMLIB_ATTRIBUTE_SET_END_INDICATOR:
 		if (value > 1)
 		{
-			throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE;
-			return -1;
+			throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE_VALUE);
 		}
 		set_end_indicator = value;
 		break;
 
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE);
 
 	}
 
-	return 0; // No error
+	return;
 
 }
 
-int vxi11_session::get_attribute(unsigned int attribute, unsigned int *value)
+unsigned int vxi11_session::get_attribute(unsigned int attribute)
 {
+
+	// Check if attribute is known to parent class
+	try
+	{
+		unsigned int value;
+		value = base_get_attribute(attribute);
+		return value;
+	}
+
+	catch (opentmlib_exception & e)
+	{
+		if (e.code != -OPENTMLIB_ERROR_BAD_ATTRIBUTE)
+		{
+			// Attribute was processed by parent class but an error was thrown. Pass up...
+			throw e;
+		}
+	}
 
 	switch (attribute)
 	{
 
+	case OPENTMLIB_ATTRIBUTE_TRACING:
+		return tracing;
+
 	case OPENTMLIB_ATTRIBUTE_EOL_CHAR:
-		*value = eol_char;
-		break;
+		return eol_char;
 
 	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
-		*value = timeout;
-		break;
+		return timeout;
 
 	case OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE:
-		*value = term_char_enable;
-		break;
+		return term_char_enable;
 
 	case OPENTMLIB_ATTRIBUTE_TERM_CHARACTER:
-		*value = term_character;
-		break;
+		return term_character;
 
 	case OPENTMLIB_ATTRIBUTE_STATUS_BYTE:
 
@@ -325,8 +358,7 @@ int vxi11_session::get_attribute(unsigned int attribute, unsigned int *value)
 			parms.io_timeout = timeout * 1000; // Timeout in ms
 			if ((response = device_readstb_1(&parms, vxi11_link)) == NULL)
 			{
-				throw -OPENTMLIB_ERROR_VXI11_RPC;
-				return -1;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 			}
 
 			if (response->error != 0)
@@ -334,42 +366,34 @@ int vxi11_session::get_attribute(unsigned int attribute, unsigned int *value)
 				last_operation_error = response->error;
 				if (throw_proper_error(response->error) == -1)
 				{
-					throw -OPENTMLIB_ERROR_VXI11_READ_STB;
+					throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_READ_STB);
 				}
-				return -1;
 			}
 
-			*value = response->stb;
+			return response->stb;
 		}
 		break;
 
 	case OPENTMLIB_ATTRIBUTE_VXI11_MAXRECVSIZE:
-		*value = max_message_size;
-		break;
+		return max_message_size;
 
 	case OPENTMLIB_ATTRIBUTE_WAIT_LOCK:
-		*value = wait_lock;
-		break;
+		return wait_lock;
 
 	case OPENTMLIB_ATTRIBUTE_SET_END_INDICATOR:
-		*value = set_end_indicator;
-		break;
+		return set_end_indicator;
 
 	case OPENTMLIB_ATTRIBUTE_VXI11_LAST_ERROR:
-		*value = last_operation_error;
-		break;
+		return last_operation_error;
 
 	default:
-		throw -OPENTMLIB_ERROR_BAD_ATTRIBUTE;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_ATTRIBUTE);
 
 	}
 
-	return 0; // No error
-
 }
 
-int vxi11_session::io_operation(unsigned int operation, unsigned int value)
+void vxi11_session::io_operation(unsigned int operation, unsigned int value)
 {
 
 	switch (operation)
@@ -382,8 +406,7 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 			// TODO: Returns NULL, need to find our why!
 			if ((response = device_abort_1(&device_link, vxi11_abort_link)) == NULL)
 			{
-				throw -OPENTMLIB_ERROR_VXI11_RPC;
-				return -1;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 			}
 
 			if (response->error != 0)
@@ -391,9 +414,9 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				last_operation_error = response->error;
 				if (throw_proper_error(response->error) == -1)
 				{
-					throw -OPENTMLIB_ERROR_VXI11_ABORT;
+					throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_ABORT);
 				}
-				return -1;
+				return;
 			}
 
 		}
@@ -416,8 +439,7 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 			parms.io_timeout = timeout * 1000; // Timeout in ms
 			if ((response = device_trigger_1(&parms, vxi11_link)) == NULL)
 			{
-				throw -OPENTMLIB_ERROR_VXI11_RPC;
-				return -1;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 			}
 
 			if (response->error != 0)
@@ -425,9 +447,9 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				last_operation_error = response->error;
 				if (throw_proper_error(response->error) == -1)
 				{
-					throw -OPENTMLIB_ERROR_VXI11_TRIGGER;
+					throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_TRIGGER);
 				}
-				return -1;
+				return;
 			}
 
 		}
@@ -450,8 +472,7 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 			parms.io_timeout = timeout * 1000; // Timeout in ms
 			if ((response = device_clear_1(&parms, vxi11_link)) == NULL)
 			{
-				throw -OPENTMLIB_ERROR_VXI11_RPC;
-				return -1;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 			}
 
 			if (response->error != 0)
@@ -459,9 +480,9 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				last_operation_error = response->error;
 				if (throw_proper_error(response->error) == -1)
 				{
-					throw -OPENTMLIB_ERROR_VXI11_CLEAR;
+					throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_CLEAR);
 				}
-				return -1;
+				return;
 			}
 
 		}
@@ -484,8 +505,7 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 			parms.io_timeout = timeout * 1000; // Timeout in ms
 			if ((response = device_remote_1(&parms, vxi11_link)) == NULL)
 			{
-				throw -OPENTMLIB_ERROR_VXI11_RPC;
-				return -1;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 			}
 
 			if (response->error != 0)
@@ -493,9 +513,9 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				last_operation_error = response->error;
 				if (throw_proper_error(response->error) == -1)
 				{
-					throw -OPENTMLIB_ERROR_VXI11_REMOTE;
+					throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_REMOTE);
 				}
-				return -1;
+				return;
 			}
 
 		}
@@ -518,8 +538,7 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 			parms.io_timeout = timeout * 1000; // Timeout in ms
 			if ((response = device_local_1(&parms, vxi11_link)) == NULL)
 			{
-				throw -OPENTMLIB_ERROR_VXI11_RPC;
-				return -1;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 			}
 
 			if (response->error != 0)
@@ -527,9 +546,9 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				last_operation_error = response->error;
 				if (throw_proper_error(response->error) == -1)
 				{
-					throw -OPENTMLIB_ERROR_VXI11_LOCAL;
+					throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_LOCAL);
 				}
-				return -1;
+				return;
 			}
 
 		}
@@ -551,8 +570,7 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 			parms.lock_timeout = timeout * 1000; // Timeout in ms
 			if ((response = device_lock_1(&parms, vxi11_link)) == NULL)
 			{
-				throw -OPENTMLIB_ERROR_VXI11_RPC;
-				return -1;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 			}
 
 			if (response->error != 0)
@@ -560,9 +578,9 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				last_operation_error = response->error;
 				if (throw_proper_error(response->error) == -1)
 				{
-					throw -OPENTMLIB_ERROR_VXI11_LOCK;
+					throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_LOCK);
 				}
-				return -1;
+				return;
 			}
 
 		}
@@ -574,8 +592,7 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 			Device_Error *response;
 			if ((response = device_unlock_1(&device_link, vxi11_link)) == NULL)
 			{
-				throw -OPENTMLIB_ERROR_VXI11_RPC;
-				return -1;
+				throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_RPC);
 			}
 
 			if (response->error != 0)
@@ -583,21 +600,20 @@ int vxi11_session::io_operation(unsigned int operation, unsigned int value)
 				last_operation_error = response->error;
 				if (throw_proper_error(response->error) == -1)
 				{
-					throw -OPENTMLIB_ERROR_VXI11_UNLOCK;
+					throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_UNLOCK);
 				}
-				return -1;
+				return;
 			}
 
 		}
 		break;
 
 	default:
-		throw -OPENTMLIB_ERROR_BAD_OPERATION;
-		return -1;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_BAD_OPERATION);
 
 	}
 
-	return 0;
+	return;
 
 }
 
@@ -607,47 +623,33 @@ int vxi11_session::throw_proper_error(int error_code)
 	switch (error_code)
 	{
 	case 1: // Syntax error
-		throw -OPENTMLIB_ERROR_VXI11_SYNTAX;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_SYNTAX);
 	case 3: // Device not accessible
-		throw -OPENTMLIB_ERROR_VXI11_DEVICE_NOT_ACCESSIBLE;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_DEVICE_NOT_ACCESSIBLE);
 	case 4: // Invalid link identifier
-		throw -OPENTMLIB_ERROR_VXI11_INVALID_LINK_ID;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_INVALID_LINK_ID);
 	case 5: // Parameter error
-		throw -OPENTMLIB_ERROR_VXI11_PARAMETER;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_PARAMETER);
 	case 6: // Channel not established
-		throw -OPENTMLIB_ERROR_VXI11_CHANNEL_NOT_ESTABLISHED;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_CHANNEL_NOT_ESTABLISHED);
 	case 8: // Operation not supported
-		throw -OPENTMLIB_ERROR_OPERATION_UNSUPPORTED;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_OPERATION_UNSUPPORTED);
 	case 9: // Out of resources
-		throw -OPENTMLIB_ERROR_VXI11_OUT_OF_RESOURCES;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_OUT_OF_RESOURCES);
 	case 11: // Device locked by another link
-		throw -OPENTMLIB_ERROR_DEVICE_LOCKED;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_DEVICE_LOCKED);
 	case 12: // No lock held
-		throw -OPENTMLIB_ERROR_NO_LOCK_HELD;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_NO_LOCK_HELD);
 	case 15: // Timeout
-		throw -OPENTMLIB_ERROR_TIMEOUT;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_TIMEOUT);
 	case 17: // I/O error
-		throw -OPENTMLIB_ERROR_IO_ISSUE;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_IO_ISSUE);
 	case 21: // invalid address
-		throw -OPENTMLIB_ERROR_VXI11_INVALID_ADDRESS;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_INVALID_ADDRESS);
 	case 23: // Abort
-		throw -OPENTMLIB_ERROR_TRANSACTION_ABORTED;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_TRANSACTION_ABORTED);
 	case 29: // Channel already established
-		throw -OPENTMLIB_ERROR_VXI11_CHANNEL_ESTABLISHED;
-		break;
+		throw_opentmlib_error(-OPENTMLIB_ERROR_VXI11_CHANNEL_ESTABLISHED);
 	default:
 		return -1;
 	}

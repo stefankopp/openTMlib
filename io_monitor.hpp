@@ -1,5 +1,5 @@
 /*
- * session_factory.hpp
+ * monitor.hpp
  * This file is part of an open-source test and measurement I/O library.
  * See documentation for details.
  *
@@ -19,30 +19,28 @@
  * http://www.gnu.org/copyleft/gpl.html.
  */
 
-#ifndef SESSION_FACTORY_HPP
-#define SESSION_FACTORY_HPP
+#ifndef IO_MONITOR_HPP
+#define IO_MONITOR_HPP
 
-#include <string>
-#include "io_session.hpp"
-#include "configuration_store.hpp"
-#include "io_monitor.hpp"
+#define DIRECTION_OUT			0
+#define DIRECTION_IN			1
+
+//#include <string>
+//#include <boost/tokenizer.hpp>
+//#include "opentmlib.hpp"
 
 using namespace std;
 
-class session_factory
+class io_monitor
 {
 
 public:
-	session_factory(string config_store = ""); // Constructor
-	~session_factory(); // Destructor
-	io_session *open_session(string resource, bool mode, unsigned int timeout); // Create session
-	void close_session(io_session *session_ptr);
-	configuration_store *get_store();
+	io_monitor(string log_file = "/usr/local/etc/opentmlib.monitor"); // Constructor
+	~io_monitor(); // Destructor
+	void log(string name, int direction, string message, bool eol = true);
 
 private:
-	string & uppercase(string & string_to_change);
-	configuration_store *store;
-	io_monitor *monitor;
+	int fd;
 
 protected:
 

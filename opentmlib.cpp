@@ -3,7 +3,7 @@
  * This file is part of an open-source test and measurement I/O library.
  * See documentation for details.
  *
- * Copyright (C) 2011, Stefan Kopp, Gechingen, Germany
+ * Copyright (C) 2011 Stefan Kopp
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -39,6 +39,8 @@ struct error_list usbtmc_errors[] =
 	{ OPENTMLIB_ERROR_CSTORE_BAD_ALIAS, "Unknown configuration store alias" },
 	{ OPENTMLIB_ERROR_CSTORE_BAD_VALUE, "Bad configuration store value" },
 	{ OPENTMLIB_ERROR_CSTORE_FILE_SIZE, "Configuration store is too big" },
+	{ OPENTMLIB_ERROR_CSTORE_BAD_SECTION, "Configuration store section does not exist" },
+	{ OPENTMLIB_ERROR_CSTORE_BAD_OPTION, "Configuration store option does not exist" },
 	{ OPENTMLIB_ERROR_TIMEOUT, "Timeout" },
 	{ OPENTMLIB_ERROR_IO_ISSUE, "I/O issue" },
 	{ OPENTMLIB_ERROR_TRANSACTION_ABORTED, "Transaction aborted" },
@@ -46,6 +48,9 @@ struct error_list usbtmc_errors[] =
 	{ OPENTMLIB_ERROR_OPERATION_UNSUPPORTED, "Operation not supported" },
 	{ OPENTMLIB_ERROR_NO_LOCK_HELD, "No lock held" },
 	{ OPENTMLIB_ERROR_LOCKING_NOT_SUPPORTED, "Locking not supported" },
+	{ OPENTMLIB_ERROR_FORMAT, "Bad format" },
+	{ OPENTMLIB_ERROR_SCPI_ERROR, "Instrument returned a SCPI error" },
+	{ OPENTMLIB_ERROR_SCPI_UNABLE_TO_CLEAR, "Unable to clear SCPI error queue" },
 
 	/* Error codes specific to socket driver */
 	{ OPENTMLIB_ERROR_SOCKET_REQUEST_TOO_MUCH, "Requesting too much data" },
@@ -117,7 +122,12 @@ struct error_list usbtmc_errors[] =
 void opentmlib_error(int code, string & message)
 {
 
-	// Find out how many errors are in teh list
+	if (message.size() < 120)
+	{
+		message.resize(120);
+	}
+
+	// Find out how many errors are in the list
 	int number_of_entries = sizeof(usbtmc_errors) / sizeof(struct error_list);
 
 	// Set string to default value (in case we don't find this error)
@@ -133,9 +143,9 @@ void opentmlib_error(int code, string & message)
 		}
 	}
 
-	// Try to get error message via strerror()
 	if (message == "")
 	{
+		// Try to get error message via strerror()
 		string message_str;
 		message_str.resize(120);
 		strncpy((char *) message_str.c_str(), strerror(-code), 120);
@@ -144,4 +154,16 @@ void opentmlib_error(int code, string & message)
 
 	return;
 
+}
+
+void throw_opentmlib_error(int code)
+{
+	string message;
+	opentmlib_error(code, message);
+	throw opentmlib_exception(code, message);
+}
+
+opentmlib_exception::opentmlib_exception(int code, string & message) : runtime_error(message)
+{
+	this->code = code;
 }

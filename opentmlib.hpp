@@ -3,7 +3,7 @@
  * This file is part of an open-source test and measurement I/O library.
  * See documentation for details.
  *
- * Copyright (C) 2011, Stefan Kopp, Gechingen, Germany
+ * Copyright (C) 2011 Stefan Kopp
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,8 +22,9 @@
 #ifndef OPENTMLIB_HPP
 #define OPENTMLIB_HPP
 
-#include "opentmlib.h"
 #include <string>
+#include <stdexcept>
+#include "opentmlib.h"
 
 using namespace std;
 
@@ -167,5 +168,15 @@ struct error_list
 };
 
 void opentmlib_error(int code, string & message);
+void throw_opentmlib_error(int code);
+
+class opentmlib_exception : public runtime_error
+{
+
+public:
+	int code;
+	opentmlib_exception(int code, string & message);
+
+};
 
 #endif

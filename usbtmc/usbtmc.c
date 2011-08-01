@@ -126,6 +126,7 @@ struct usbtmc_device_data
 	u8 term_char; /* Termination character */
 	int term_char_enabled; /* Terminate read automatically? */
 	unsigned short int timeout; /* Timeout value (s) */
+	int set_end_indicator; /* Set end indicator with last byte of transfer */
 	/* Last bTag values (needed for abort) */
 	unsigned char usbtmc_last_write_bTag;
 	unsigned char usbtmc_last_read_bTag;
@@ -1207,6 +1208,12 @@ int usbtmc_control_set_attribute(struct usbtmc_io_control *control_message)
 			return -OPENTMLIB_ERROR_USBTMC_INVALID_ATTRIBUTE_VALUE;
 		p_device_data->term_char = control_message->value;
 		break;
+
+	case OPENTMLIB_ATTRIBUTE_SET_END_INDICATOR:
+		if ((control_message->value < 0) || (control_message->value > 1))
+			return -OPENTMLIB_ERROR_USBTMC_INVALID_ATTRIBUTE_VALUE;
+		p_device_data->set_end_indicator = control_message->value;
+		break;
 				
 	default:
 		/* Bad attribute or read-only */
@@ -1236,6 +1243,10 @@ int usbtmc_control_get_attribute(struct usbtmc_io_control *control_message)
 
 	case OPENTMLIB_ATTRIBUTE_TIMEOUT:
 		value = p_device_data->timeout / HZ; // Back to s from jiffies
+		break;
+
+	case OPENTMLIB_ATTRIBUTE_SET_END_INDICATOR:
+		value = p_device_data->set_end_indicator;
 		break;
 
 	case OPENTMLIB_ATTRIBUTE_TERM_CHAR_ENABLE:
