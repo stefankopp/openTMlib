@@ -29,6 +29,12 @@ cp libopentmlib.so /usr/local/lib
 chmod 644 /usr/local/lib/libopentmlib.so
 ldconfig
 
+# Make sure store and monitor files exist and have proper permissions
+touch /usr/local/etc/opentmlib.monitor
+chmod 666 /usr/local/etc/opentmlib.monitor
+touch /usr/local/etc/opentmlib.store
+chmod 644 /usr/local/etc/opentmlib.store
+
 # Load USBTMC driver into kernel
 module="usbtmc"
 /sbin/rmmod $module
